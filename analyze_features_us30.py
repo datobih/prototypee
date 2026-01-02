@@ -106,7 +106,7 @@ def label_outcomes(df, horizon=15, target=0.0015, stop=0.0005):
     return df
 
 print('='*80)
-print('XAUUSD 1MIN FEATURE CORRELATION ANALYSIS')
+print('US30 1MIN FEATURE CORRELATION ANALYSIS')
 print('='*80)
 
 print('\nLoading data...')
@@ -420,8 +420,8 @@ if len(successful) > 0:
             median = successful[feat].median()
             print(f'{feat:<25} Median: {median:>8.4f}  Range: {min_val:>8.4f} to {max_val:>8.4f}')
 
-test.to_csv('data/processed/XAUUSD1_feature_analysis.csv')
-print(f'\nSaved test results: data/processed/XAUUSD1_feature_analysis.csv')
+test.to_csv('data/processed/US30_feature_analysis.csv')
+print(f'\nSaved test results: data/processed/US30_feature_analysis.csv')
 
 # ============================================================================
 # BULLISH CONTINUATION TRADING RULES

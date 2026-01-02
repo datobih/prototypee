@@ -1,5 +1,5 @@
 ﻿"""
-XAUUSD Live Trader using MetaTrader 5
+US30 Live Trader using MetaTrader 5
 Rule 4: RF >= 0.70 + Bullish Pattern + NY_OVERLAP Session
 
 Conditions:
@@ -25,7 +25,7 @@ import math
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-SYMBOL = "XAUUSDm"  # Note: Your broker uses 'm' suffix
+SYMBOL = "US30m"  # Note: Your broker uses 'm' suffix
 TIMEFRAME = mt5.TIMEFRAME_M1
 LOT_SIZE = 0.01  # Start small - adjust based on your account
 TARGET_PCT = 0.001  # 0.1%
@@ -42,7 +42,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('live_trader.log'),
+        logging.FileHandler('live_trader_us30.log'),
         logging.StreamHandler()
     ]
 )
@@ -287,7 +287,7 @@ def check_rule4_signal(df, rf_model, feature_names):
 def run_live_trader():
     """Main trading loop"""
     logger.info("="*60)
-    logger.info("XAUUSD LIVE TRADER - RULE 4")
+    logger.info("US30 LIVE TRADER - RULE 4")
     logger.info("="*60)
     
     # Connect to MT5
@@ -400,7 +400,7 @@ def run_live_trader():
 def run_dry_mode():
     """Run in simulation mode - no real trades"""
     logger.info("="*60)
-    logger.info("XAUUSD LIVE TRADER - DRY RUN MODE")
+    logger.info("US30 LIVE TRADER - DRY RUN MODE")
     logger.info("="*60)
     
     # Connect to MT5
@@ -490,7 +490,7 @@ if __name__ == "__main__":
         run_dry_mode()
     else:
         print("="*60)
-        print("XAUUSD LIVE TRADER")
+        print("US30 LIVE TRADER")
         print("="*60)
         print("\nUsage:")
         print("  python live_trader.py --dry   : Dry run (no real trades)")
