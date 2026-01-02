@@ -1,0 +1,11 @@
+﻿# Colab-specific requirements (minimal installs)
+# Colab already has: numpy, pandas, scipy, scikit-learn, tensorflow, keras, matplotlib, seaborn
+
+# Financial Data (not in Colab)
+yfinance>=0.2.66
+pandas-ta>=0.4.71b0
+smartmoneyconcepts>=0.0.26
+
+# Configuration (not in Colab)
+pyyaml>=6.0
+python-dotenv>=1.0.0

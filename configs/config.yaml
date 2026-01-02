@@ -1,0 +1,71 @@
+# Algorithmic Trading Pattern Detection Configuration
+
+# Data Configuration
+data:
+  # Use custom CSV file instead of Yahoo Finance
+  # custom_csv_path: 'C:\Users\Dayod\Downloads\XAUUSD5.csv'
+  
+  symbols:
+    - GC=F  # Gold Futures
+  timeframes:
+    primary: 5m     # 5-minute candles
+    secondary: 5m   # 5-minute for confirmation
+  date_range:
+    period: '60d'   # Maximum period for 5m data
+  
+# Feature Engineering
+features:
+  # Scalping features (1-minute timeframe)
+  price_velocity_windows: [3, 6, 12]      # 3min, 6min, 12min momentum
+  volume_windows: [5, 10, 20]             # Short-term volume
+  vwap_periods: [5, 10, 20]               # Intraday VWAP
+  round_numbers: [0.0010, 0.0050]         # Tighter levels for intraday
+  
+  # Scalping-specific features
+  liquidity_sweep_lookback: 12            # 12 candles = 12 minutes
+  order_flow_windows: [6, 12, 24]         # 6min, 12min, 24min
+  range_detection_window: 24              # 24 minutes for range
+  momentum_acceleration_windows: [3, 6]   # Fast momentum changes
+  correlation_pairs:
+    - [EURUSD, GBPUSD]
+    - [USDJPY, EURUSD]
+  
+  # Smart Money Concepts (SMC) features
+  smc_swing_length: 10                    # 10 candles for scalping (use 50 for daily)
+  smc_liquidity_range: 0.01               # 1% range for liquidity detection
+
+# Pattern Discovery
+pattern_discovery:
+  clustering:
+    methods: ['kmeans', 'gmm', 'dbscan']
+    n_clusters_range: [3, 5, 8, 10, 15]
+  autoencoder:
+    encoding_dim: 32
+    epochs: 100
+    batch_size: 256
+  hmm:
+    n_states: 5
+    n_iterations: 100
+
+# Backtesting
+backtesting:
+  regime_periods:
+    bull: ['2019-01-01', '2020-02-01']
+    bear: ['2020-02-01', '2020-06-01']
+    volatile: ['2020-03-01', '2020-05-01']
+    calm: ['2021-01-01', '2021-12-31']
+  metrics:
+    - sharpe_ratio
+    - max_drawdown
+    - win_rate
+    - profit_factor
+
+# Model Saving
+models:
+  save_dir: 'models'
+  checkpoint_frequency: 10
+
+# Visualization
+visualization:
+  plots_dir: 'outputs/plots'
+  interactive: true

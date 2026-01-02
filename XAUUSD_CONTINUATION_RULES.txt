@@ -1,0 +1,142 @@
+﻿================================================================================
+XAUUSD 1-MINUTE BULLISH CONTINUATION TRADING RULES
+================================================================================
+Generated: 2025-12-06
+Data: XAUUSD1.csv (100,000 bars, 1-minute)
+Date Range: 2025-08-27 to 2025-12-05 (~3.5 months)
+Config: 20 bars horizon (20min), 0.1% target, 0.05% stop (2:1 R:R)
+
+KEY INSIGHT: Gold has inherent upward bias. Bullish continuation works,
+bearish continuation does NOT. Only trade LONG on momentum.
+
+================================================================================
+VALIDATION SUMMARY
+================================================================================
+
+PRICE ACTION ALONE (no RF filter):
+  - 3/3 UP + BIG BODY + CLOSE>0.7 + Excl LONDON = 53.0% (537/1013)
+  - Walk-forward: 1/5 periods pass (NOT TRADEABLE)
+
+WITH RF 0.80-0.90 FILTER:
+  - Same conditions + RF filter = 67.7% (42/62)
+  - Walk-forward: 5/5 periods pass (ALL PASS)
+  - Min period: 58.3%, Mean: 67.4%
+
+CONCLUSION: The RF filter is ESSENTIAL. Price action alone is ~random.
+
+================================================================================
+RULE 1 - CONSERVATIVE (Exclude LONDON)
+================================================================================
+
+CONDITIONS (ALL must be met):
+  1. RF Probability: 0.80 - 0.90 (from models/random_forest.pkl)
+  2. Last 3 bars: ALL UP (up_count_3 == 3)
+  3. Current bar: BIG BODY (body > 1.5x 10-bar avg body)
+  4. Close position: > 0.7 (close near high of bar)
+
+SESSIONS ALLOWED:
+  - ASIAN:      00:00 - 08:00 UTC
+  - NY_OVERLAP: 13:00 - 17:00 UTC
+  - NY:         17:00 - 22:00 UTC
+
+SESSIONS EXCLUDED:
+  - LONDON:     08:00 - 13:00 UTC (44.9% win rate - AVOID)
+  - LATE:       22:00 - 00:00 UTC
+
+DIRECTION: LONG only
+
+PERFORMANCE (validated on 100K bars):
+  - Win Rate: 67.7% (42W/20L)
+  - Expected Value: +1.03R per trade
+  - Walk-forward: 5/5 periods PASS
+  - Frequency: ~62 trades per 100K bars (~18 trades/month)
+
+================================================================================
+RULE 2 - HIGH WIN RATE (NY_OVERLAP Only)
+================================================================================
+
+CONDITIONS (ALL must be met):
+  1. RF Probability: 0.80 - 0.90 (from models/random_forest.pkl)
+  2. Last 3 bars: ALL UP (up_count_3 == 3)
+  3. Current bar: BIG BODY (body > 1.5x 10-bar avg body)
+  4. Close position: > 0.7 (close near high of bar)
+
+SESSIONS ALLOWED:
+  - NY_OVERLAP: 13:00 - 17:00 UTC ONLY
+
+DIRECTION: LONG only
+
+PERFORMANCE (validated on 100K bars):
+  - Win Rate: 75.0% (12W/4L)
+  - Expected Value: +1.25R per trade
+  - Frequency: ~16 trades per 100K bars (~5 trades/month, very selective)
+
+================================================================================
+FEATURE DEFINITIONS
+================================================================================
+
+RF Probability:
+  - Output from RandomForest model (models/random_forest.pkl)
+  - Predicts probability of "movement" (hitting target OR stop)
+  - Range 0.80-0.90 is the sweet spot for continuation
+
+up_count_3:
+  - Count of up bars in last 3 bars
+  - up_count_3 == 3 means ALL 3 bars closed higher than previous
+
+big_body:
+  - Binary flag (0 or 1)
+  - 1 if abs(body) > 1.5 * rolling_10_mean(abs(body))
+  - Indicates strong conviction candle
+
+close_position:
+  - (Close - Low) / (High - Low)
+  - Range 0 to 1
+  - > 0.7 means close is in upper 30% of bar range
+
+Sessions (UTC):
+  - ASIAN:      00:00 - 08:00
+  - LONDON:     08:00 - 13:00
+  - NY_OVERLAP: 13:00 - 17:00 (London + NY both active)
+  - NY:         17:00 - 22:00
+  - LATE:       22:00 - 00:00
+
+================================================================================
+EXECUTION
+================================================================================
+
+ENTRY: Market order at close of signal bar
+TARGET: Entry * 1.001 (0.1% / 10 pips on gold)
+STOP: Entry * 0.9995 (0.05% / 5 pips on gold)
+RISK:REWARD = 2:1
+TIME LIMIT: 20 minutes (20 bars)
+
+================================================================================
+IMPORTANT NOTES
+================================================================================
+
+1. LONG ONLY - Do not short bearish continuation patterns (they fail ~45%)
+
+2. The RF FILTER IS ESSENTIAL - without it, price action alone is ~53% (random)
+
+3. The rf_prob must be calculated using models/random_forest.pkl with the
+   exact feature set from models/feature_names.txt
+
+4. Walk-forward validation: 5/5 periods passed for Rule 1
+
+5. LONDON session has 44.9% win rate on these setups - always exclude it
+
+6. NY_OVERLAP (13:00-17:00 UTC) is the highest conviction session
+
+7. feature_analysis.csv may have DIFFERENT rf_prob values than recalculating
+   fresh - always recalculate from raw data for live trading
+
+================================================================================
+KNOWN ISSUES
+================================================================================
+
+- feature_analysis.csv only covers Oct 27 - Dec 5 (40K bars)
+- rf_prob in feature_analysis.csv may differ from fresh calculation
+- For accurate signals, always recalculate features from raw data
+
+================================================================================
