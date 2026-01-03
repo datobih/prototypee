@@ -106,12 +106,12 @@ def label_outcomes(df, horizon=15, target=0.0015, stop=0.0005):
     return df
 
 print('='*80)
-print('US30 1MIN FEATURE CORRELATION ANALYSIS')
+print('BTCUSD 1MIN FEATURE CORRELATION ANALYSIS')
 print('='*80)
 
 print('\nLoading data...')
 # New format: Date, Time, Open, High, Low, Close, TickVol, Vol, Spread
-df = pd.read_csv('data/raw/US30.csv', sep='\t', 
+df = pd.read_csv('data/raw/BTCUSD.csv', sep='\t', 
                  names=['Date','Time','Open','High','Low','Close','TickVol','Vol','Spread'])
 df['Datetime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], format='%Y.%m.%d %H:%M:%S')
 df.set_index('Datetime', inplace=True)
@@ -379,17 +379,17 @@ print('='*80)
 import pickle
 os.makedirs('models', exist_ok=True)
 
-with open('models/logistic_regression_us30.pkl', 'wb') as f:
+with open('models/logistic_regression_BTCUSD.pkl', 'wb') as f:
     pickle.dump(lr, f)
-print('Saved: models/logistic_regression_us30.pkl')
+print('Saved: models/logistic_regression_BTCUSD.pkl')
 
-with open('models/random_forest_us30.pkl', 'wb') as f:
+with open('models/random_forest_BTCUSD.pkl', 'wb') as f:
     pickle.dump(rf, f)
-print('Saved: models/random_forest_us30.pkl')
+print('Saved: models/random_forest_BTCUSD.pkl')
 
-with open('models/scaler_us30.pkl', 'wb') as f:
+with open('models/scaler_BTCUSD.pkl', 'wb') as f:
     pickle.dump(scaler, f)
-print('Saved: models/scaler_us30.pkl')
+print('Saved: models/scaler_BTCUSD.pkl')
 
 # Save feature names for reference
 with open('models/feature_names.txt', 'w') as f:
@@ -420,8 +420,8 @@ if len(successful) > 0:
             median = successful[feat].median()
             print(f'{feat:<25} Median: {median:>8.4f}  Range: {min_val:>8.4f} to {max_val:>8.4f}')
 
-test.to_csv('data/processed/US30_feature_analysis.csv')
-print(f'\nSaved test results: data/processed/US30_feature_analysis.csv')
+test.to_csv('data/processed/BTCUSD_feature_analysis.csv')
+print(f'\nSaved test results: data/processed/BTCUSD_feature_analysis.csv')
 
 # ============================================================================
 # BULLISH CONTINUATION TRADING RULES
@@ -725,8 +725,8 @@ if len(rule4_trades) > 0:
     rule4_output['Datetime'] = rule4_output['Datetime'].dt.strftime('%Y-%m-%d %H:%M')
     rule4_output['rf_prob'] = rule4_output['rf_prob'].round(3)
     rule4_output['entry_price'] = rule4_output['entry_price'].round(2)
-    rule4_output.to_csv('data/processed/RULE4_trades.csv', index=False)
-    print(f'\nSaved: data/processed/RULE4_trades.csv')
+    rule4_output.to_csv('data/processed/BTC_RULE4_trades.csv', index=False)
+    print(f'\nSaved: data/processed/BTC_RULE4_trades.csv')
     
     # Show all trades
     print('\n' + '-'*80)
