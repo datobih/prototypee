@@ -412,7 +412,7 @@ def run_dry_mode():
     try:
         with open('models/random_forest_BTCUSD.pkl', 'rb') as f:
             rf_model = pickle.load(f)
-        with open('models/feature_names_BTCUSD.txt', 'r') as f:
+        with open('models/feature_names.txt', 'r') as f:
             feature_names = f.read().strip().split('\n')
         logger.info(f"Model loaded with {len(feature_names)} features")
     except Exception as e:
