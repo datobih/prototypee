@@ -153,7 +153,6 @@ logs/
 *.temp
 
 # Data files
-data/raw/*
 data/processed/*
 
 # Model artifacts
