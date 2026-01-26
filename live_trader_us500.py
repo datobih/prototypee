@@ -1,5 +1,5 @@
 ﻿"""
-BTCUSD Live Trader using MetaTrader 5
+US500 Live Trader using MetaTrader 5
 Rule 4: RF >= 0.70 + Bullish Pattern + NY_OVERLAP Session
 
 Conditions:
@@ -25,13 +25,18 @@ import math
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-SYMBOL = "BTCUSDm"  # Note: Your broker uses 'm' suffix
+SYMBOL = "US500m"  # Note: Your broker uses 'm' suffix
 TIMEFRAME = mt5.TIMEFRAME_M1
 LOT_SIZE = 0.01  # Start small - adjust based on your account
 TARGET_PCT = 0.001  # 0.1%
 STOP_PCT = 0.0005   # 0.05%
 RF_THRESHOLD = 0.70
 CHECK_INTERVAL = 60  # Check every 60 seconds
+MAX_POSITIONS = 3   # Maximum concurrent positions allowed
+
+# MT5 Terminal Path (leave None to use default, or specify path to terminal64.exe)
+# Example: r"C:\Program Files\MetaTrader 5\terminal64.exe"
+MT5_PATH = "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
 
 # Session times (UTC)
 NY_OVERLAP_START = 13
@@ -42,7 +47,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('live_trader_BTCUSD.log'),
+        logging.FileHandler('live_trader_US500.log'),
         logging.StreamHandler()
     ]
 )
@@ -130,9 +135,15 @@ def create_microstructure_features(df):
 # ============================================================================
 def connect_mt5():
     """Initialize connection to MT5"""
-    if not mt5.initialize():
-        logger.error(f"MT5 initialize() failed, error: {mt5.last_error()}")
-        return False
+    if MT5_PATH:
+        if not mt5.initialize(MT5_PATH):
+            logger.error(f"MT5 initialize() failed for path: {MT5_PATH}")
+            logger.error(f"Error: {mt5.last_error()}")
+            return False
+    else:
+        if not mt5.initialize():
+            logger.error(f"MT5 initialize() failed, error: {mt5.last_error()}")
+            return False
     
     logger.info(f"MT5 connected: {mt5.terminal_info()}")
     logger.info(f"MT5 version: {mt5.version()}")
@@ -183,10 +194,10 @@ def get_current_session():
     else:
         return 'LATE'
 
-def has_open_position(symbol):
-    """Check if we already have an open position"""
+def get_open_position_count(symbol):
+    """Get the number of open positions for a symbol"""
     positions = mt5.positions_get(symbol=symbol)
-    return positions is not None and len(positions) > 0
+    return len(positions) if positions is not None else 0
 
 def get_symbol_info(symbol):
     """Get symbol info for proper lot sizing and pricing"""
@@ -287,7 +298,7 @@ def check_rule4_signal(df, rf_model, feature_names):
 def run_live_trader():
     """Main trading loop"""
     logger.info("="*60)
-    logger.info("BTCUSD LIVE TRADER - RULE 4")
+    logger.info("US500 LIVE TRADER - RULE 4")
     logger.info("="*60)
     
     # Connect to MT5
@@ -297,7 +308,7 @@ def run_live_trader():
     # Load the trained model
     logger.info("Loading model...")
     try:
-        with open('models/random_forest_BTCUSD.pkl', 'rb') as f:
+        with open('models/random_forest_US500.pkl', 'rb') as f:
             rf_model = pickle.load(f)
         with open('models/feature_names.txt', 'r') as f:
             feature_names = f.read().strip().split('\n')
@@ -359,9 +370,10 @@ def run_live_trader():
                 logger.info(f"🚨 SIGNAL DETECTED at {current_bar_time}")
                 logger.info(f"Price: {current_price:.2f} | RF Prob: {rf_prob:.3f}")
                 
-                # Check if we already have a position
-                if has_open_position(SYMBOL):
-                    logger.info("Already have open position - skipping")
+                # Check if we can open another position
+                open_count = get_open_position_count(SYMBOL)
+                if open_count >= MAX_POSITIONS:
+                    logger.info(f"Max positions reached ({open_count}/{MAX_POSITIONS}) - skipping")
                 else:
                     # Calculate SL and TP
                     stop_loss = round(current_price * (1 - STOP_PCT), 2)
@@ -383,7 +395,7 @@ def run_live_trader():
                 logger.info(f"{'='*60}")
             else:
                 # Log status every minute
-                logger.debug(f"[{session}] {current_bar_time} | Price: {current_price:.2f} | {reason}")
+                logger.info(f"[{session}] {current_bar_time} | Price: {current_price:.2f} | {reason}")
             
             # Wait for next minute boundary (candle formation)
             wait_for_next_minute()
@@ -400,7 +412,7 @@ def run_live_trader():
 def run_dry_mode():
     """Run in simulation mode - no real trades"""
     logger.info("="*60)
-    logger.info("BTCUSD LIVE TRADER - DRY RUN MODE")
+    logger.info("US500 LIVE TRADER - DRY RUN MODE")
     logger.info("="*60)
     
     # Connect to MT5
@@ -410,7 +422,7 @@ def run_dry_mode():
     # Load the trained model
     logger.info("Loading model...")
     try:
-        with open('models/random_forest_BTCUSD.pkl', 'rb') as f:
+        with open('models/random_forest_US500.pkl', 'rb') as f:
             rf_model = pickle.load(f)
         with open('models/feature_names.txt', 'r') as f:
             feature_names = f.read().strip().split('\n')
@@ -490,7 +502,7 @@ if __name__ == "__main__":
         run_dry_mode()
     else:
         print("="*60)
-        print("BTCUSD LIVE TRADER")
+        print("US500 LIVE TRADER")
         print("="*60)
         print("\nUsage:")
         print("  python live_trader.py --dry   : Dry run (no real trades)")

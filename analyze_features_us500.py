@@ -106,12 +106,12 @@ def label_outcomes(df, horizon=15, target=0.0015, stop=0.0005):
     return df
 
 print('='*80)
-print('XAUUSD 1MIN FEATURE CORRELATION ANALYSIS')
+print('US500 1MIN FEATURE CORRELATION ANALYSIS')
 print('='*80)
 
 print('\nLoading data...')
 # New format: Date, Time, Open, High, Low, Close, TickVol, Vol, Spread
-df = pd.read_csv('data/raw/XAUUSD1.csv', sep='\t', 
+df = pd.read_csv('data/raw/US500.csv', sep='\t', 
                  names=['Date','Time','Open','High','Low','Close','TickVol','Vol','Spread'])
 df['Datetime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], format='%Y.%m.%d %H:%M:%S')
 df.set_index('Datetime', inplace=True)
@@ -383,9 +383,9 @@ with open('models/logistic_regression.pkl', 'wb') as f:
     pickle.dump(lr, f)
 print('Saved: models/logistic_regression.pkl')
 
-with open('models/random_forest.pkl', 'wb') as f:
+with open('models/random_forest_US500.pkl', 'wb') as f:
     pickle.dump(rf, f)
-print('Saved: models/random_forest.pkl')
+print('Saved: models/random_forest_US500.pkl')
 
 with open('models/scaler.pkl', 'wb') as f:
     pickle.dump(scaler, f)
@@ -420,8 +420,8 @@ if len(successful) > 0:
             median = successful[feat].median()
             print(f'{feat:<25} Median: {median:>8.4f}  Range: {min_val:>8.4f} to {max_val:>8.4f}')
 
-test.to_csv('data/processed/XAUUSD1_feature_analysis.csv')
-print(f'\nSaved test results: data/processed/XAUUSD1_feature_analysis.csv')
+test.to_csv('data/processed/US500_feature_analysis.csv')
+print(f'\nSaved test results: data/processed/US500_feature_analysis.csv')
 
 # ============================================================================
 # BULLISH CONTINUATION TRADING RULES
@@ -518,8 +518,8 @@ if len(rule1_trades) > 0:
     rule1_output['Datetime'] = rule1_output['Datetime'].dt.strftime('%Y-%m-%d %H:%M')
     rule1_output['rf_prob'] = rule1_output['rf_prob'].round(3)
     rule1_output['entry_price'] = rule1_output['entry_price'].round(2)
-    rule1_output.to_csv('data/processed/RULE1_trades.csv', index=False)
-    print(f'\nSaved: data/processed/RULE1_trades.csv')
+    rule1_output.to_csv('data/processed/US500_RULE1_trades.csv', index=False)
+    print(f'\nSaved: data/processed/US500_RULE1_trades.csv')
 else:
     print('\nNo trades found matching Rule 1 conditions.')
 
@@ -569,8 +569,8 @@ if len(rule2_trades) > 0:
     rule2_output['Datetime'] = rule2_output['Datetime'].dt.strftime('%Y-%m-%d %H:%M')
     rule2_output['rf_prob'] = rule2_output['rf_prob'].round(3)
     rule2_output['entry_price'] = rule2_output['entry_price'].round(2)
-    rule2_output.to_csv('data/processed/RULE2_trades.csv', index=False)
-    print(f'\nSaved: data/processed/RULE2_trades.csv')
+    rule2_output.to_csv('data/processed/US500_RULE2_trades.csv', index=False)
+    print(f'\nSaved: data/processed/US500_RULE2_trades.csv')
 else:
     print('\nNo trades found matching Rule 2 conditions.')
 
@@ -655,8 +655,8 @@ if len(rule3_trades) > 0:
     rule3_output['Datetime'] = rule3_output['Datetime'].dt.strftime('%Y-%m-%d %H:%M')
     rule3_output['rf_prob'] = rule3_output['rf_prob'].round(3)
     rule3_output['entry_price'] = rule3_output['entry_price'].round(2)
-    rule3_output.to_csv('data/processed/RULE3_trades.csv', index=False)
-    print(f'\nSaved: data/processed/RULE3_trades.csv')
+    rule3_output.to_csv('data/processed/US500_RULE3_trades.csv', index=False)
+    print(f'\nSaved: data/processed/US500_RULE3_trades.csv')
     
     # Show sample trades
     print('\n' + '-'*80)
@@ -680,7 +680,7 @@ print('  - Close position: > 0.7 (close near high)')
 print('  - Sessions: NY_OVERLAP ONLY (13:00-17:00 UTC)')
 
 rule4_cond = (
-    (movement['rf_prob'] >= 0.70) & 
+    (movement['rf_prob'] >= 0.7) & 
     (movement['all_up_3'] == 1) & 
     (movement['big_body'] == 1) & 
     (movement['close_position'] > 0.7) &
@@ -725,8 +725,8 @@ if len(rule4_trades) > 0:
     rule4_output['Datetime'] = rule4_output['Datetime'].dt.strftime('%Y-%m-%d %H:%M')
     rule4_output['rf_prob'] = rule4_output['rf_prob'].round(3)
     rule4_output['entry_price'] = rule4_output['entry_price'].round(2)
-    rule4_output.to_csv('data/processed/RULE4_trades.csv', index=False)
-    print(f'\nSaved: data/processed/RULE4_trades.csv')
+    rule4_output.to_csv('data/processed/US500_RULE4_trades.csv', index=False)
+    print(f'\nSaved: data/processed/US500_RULE4_trades.csv')
     
     # Show all trades
     print('\n' + '-'*80)
