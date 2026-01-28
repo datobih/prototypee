@@ -69,7 +69,8 @@ def create_microstructure_features(df):
     
     return df.dropna()
 
-def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
+def label_outcomes(df, horizon=15, target=5.0, stop=2.5):
+    """Label outcomes using fixed dollar SL/TP (not percentage-based)"""
     df = df.copy()
     outcomes = []
     
@@ -80,23 +81,23 @@ def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
         entry = df['Close'].iloc[i]
         future = df.iloc[i+1:i+horizon+1]
         
-        # Check LONG
+        # Check LONG (fixed dollar targets)
         long_hit = False
         for h, l in zip(future['High'], future['Low']):
-            if h >= entry * (1 + target):
+            if h >= entry + target:  # TP hit
                 long_hit = True
                 break
-            if l <= entry * (1 - stop):
+            if l <= entry - stop:  # SL hit
                 break
         
-        # Check SHORT
+        # Check SHORT (fixed dollar targets)
         short_hit = False
         if not long_hit:
             for h, l in zip(future['High'], future['Low']):
-                if l <= entry * (1 - target):
+                if l <= entry - target:  # TP hit
                     short_hit = True
                     break
-                if h >= entry * (1 + stop):
+                if h >= entry + stop:  # SL hit
                     break
         
         outcomes.append(1 if long_hit else (2 if short_hit else 0))
@@ -106,12 +107,12 @@ def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
     return df
 
 print('='*80)
-print('US30 1MIN FEATURE CORRELATION ANALYSIS')
+print('XAUUSD 1MIN FEATURE CORRELATION ANALYSIS')
 print('='*80)
 
 print('\nLoading data...')
 # New format: Date, Time, Open, High, Low, Close, TickVol, Vol, Spread
-df = pd.read_csv('data/raw/US30.csv', sep='\t', 
+df = pd.read_csv('data/raw/XAUUSD1.csv', sep='\t', 
                  names=['Date','Time','Open','High','Low','Close','TickVol','Vol','Spread'])
 df['Datetime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], format='%Y.%m.%d %H:%M:%S')
 df.set_index('Datetime', inplace=True)
@@ -121,8 +122,8 @@ print(f'Loaded {len(df)} bars (1-minute timeframe)')
 print('\nEngineering features...')
 df = create_microstructure_features(df)
 
-print('\nLabeling outcomes (20 bars=20mins, 0.1% target, 0.05% stop)...')
-df = label_outcomes(df, 20, 0.001, 0.0005)
+print('\nLabeling outcomes (20 bars=20mins, $5 target, $2.5 stop)...')
+df = label_outcomes(df, 20, 5.0, 2.5)
 
 # Create combination features on full dataset
 print('\nCreating combination features...')
@@ -379,17 +380,17 @@ print('='*80)
 import pickle
 os.makedirs('models', exist_ok=True)
 
-with open('models/logistic_regression_us30.pkl', 'wb') as f:
+with open('models/logistic_regression.pkl', 'wb') as f:
     pickle.dump(lr, f)
-print('Saved: models/logistic_regression_us30.pkl')
+print('Saved: models/logistic_regression.pkl')
 
-with open('models/random_forest_us30.pkl', 'wb') as f:
+with open('models/random_forest.pkl', 'wb') as f:
     pickle.dump(rf, f)
-print('Saved: models/random_forest_us30.pkl')
+print('Saved: models/random_forest.pkl')
 
-with open('models/scaler_us30.pkl', 'wb') as f:
+with open('models/scaler.pkl', 'wb') as f:
     pickle.dump(scaler, f)
-print('Saved: models/scaler_us30.pkl')
+print('Saved: models/scaler.pkl')
 
 # Save feature names for reference
 with open('models/feature_names.txt', 'w') as f:
@@ -420,21 +421,22 @@ if len(successful) > 0:
             median = successful[feat].median()
             print(f'{feat:<25} Median: {median:>8.4f}  Range: {min_val:>8.4f} to {max_val:>8.4f}')
 
-test.to_csv('data/processed/US30_feature_analysis.csv')
-print(f'\nSaved test results: data/processed/US30_feature_analysis.csv')
+test.to_csv('data/processed/XAUUSD1_feature_analysis.csv')
+print(f'\nSaved test results: data/processed/XAUUSD1_feature_analysis.csv')
 
 # ============================================================================
-# BULLISH CONTINUATION TRADING RULES
+# HEDGING STRATEGY - FORWARD TEST
 # ============================================================================
 print('\n' + '='*80)
-print('BULLISH CONTINUATION TRADING RULES')
+print('HEDGING STRATEGY - FORWARD TEST (RF >= 0.70)')
 print('='*80)
+print('Logic: Take BOTH LONG and SHORT when RF >= 0.70')
+print('       Cancel whichever side hits stop loss first')
+print('       Keep the surviving trade until target/stop')
 
-# Use the test set which already has rf_prob calculated
-test_rules = test.reset_index()
-
-# Add session based on hour
-test_rules['hour'] = test_rules['Datetime'].dt.hour
+# Prepare test set with datetime and session info
+test_hedge = test.reset_index()
+test_hedge['hour'] = test_hedge['Datetime'].dt.hour
 
 def get_session(hour):
     if 0 <= hour < 8:
@@ -448,293 +450,119 @@ def get_session(hour):
     else:
         return 'LATE'
 
-test_rules['session'] = test_rules['hour'].apply(get_session)
+test_hedge['session'] = test_hedge['hour'].apply(get_session)
 
-# Add continuation pattern: 3/3 bars up
-test_rules['all_up_3'] = (test_rules['up_count_3'] == 3).astype(int)
+# Filter for high probability setups (RF >= 0.70)
+hedge_setups = test_hedge[test_hedge['rf_prob'] >= 0.70].copy()
 
-# Filter for movement trades only (outcome != 0)
-movement = test_rules[test_rules['outcome'] != 0].copy()
+print(f'\nTotal test bars: {len(test_hedge)}')
+print(f'High probability setups (RF >= 0.70): {len(hedge_setups)} ({len(hedge_setups)/len(test_hedge)*100:.2f}%)')
 
-print(f'Test set bars: {len(test_rules)}')
-print(f'Movement trades: {len(movement)}')
+# For each setup, determine which side survives and which gets stopped out
+hedge_results = []
 
-# ============================================================================
-# RULE 1: RF 0.80-0.90 + 3/3 UP + BIG BODY + CLOSE > 0.7 + Exclude LONDON
-# ============================================================================
-print('\n' + '-'*80)
-print('RULE 1: Bullish Continuation (Exclude LONDON)')
-print('-'*80)
-print('Conditions:')
-print('  - RF Probability: 0.80 - 0.90')
-print('  - Last 3 bars: ALL UP (up_count_3 == 3)')
-print('  - Current bar: BIG BODY (> 1.5x 10-bar avg)')
-print('  - Close position: > 0.7 (close near high)')
-print('  - Sessions: ASIAN, NY_OVERLAP, NY (exclude LONDON, LATE)')
-
-rule1_cond = (
-    (movement['rf_prob'] >= 0.80) & 
-    (movement['rf_prob'] < 0.90) & 
-    (movement['all_up_3'] == 1) & 
-    (movement['big_body'] == 1) & 
-    (movement['close_position'] > 0.7) &
-    (movement['session'].isin(['ASIAN', 'NY_OVERLAP', 'NY']))
-)
-
-rule1_trades = movement[rule1_cond].copy()
-rule1_trades['result'] = rule1_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
-rule1_trades['direction'] = 'LONG'
-rule1_trades['entry_price'] = rule1_trades['Close']
-rule1_trades['target_price'] = (rule1_trades['Close'] * 1.001).round(2)
-rule1_trades['stop_price'] = (rule1_trades['Close'] * 0.9995).round(2)
-
-if len(rule1_trades) > 0:
-    wins = (rule1_trades['result'] == 'WIN').sum()
-    losses = (rule1_trades['result'] == 'LOSS').sum()
-    win_rate = wins / len(rule1_trades) * 100
+for idx, row in hedge_setups.iterrows():
+    entry = row['Close']
     
-    print(f'\nResults:')
-    print(f'  Total trades: {len(rule1_trades)}')
-    print(f'  Wins: {wins}')
-    print(f'  Losses: {losses}')
-    print(f'  Win Rate: {win_rate:.1f}%')
-    print(f'  Expected Value: {(win_rate/100 * 2) - ((1 - win_rate/100) * 1):.2f}R per trade')
+    # LONG trade parameters (fixed dollar values)
+    long_target = entry + 5.0     # $5 target
+    long_stop = entry - 2.5       # $2.5 stop
     
-    # Walk-forward validation
-    rule1_trades['period'] = pd.cut(range(len(rule1_trades)), bins=5, labels=['P1','P2','P3','P4','P5'])
-    print(f'\nWalk-forward validation:')
-    passes = 0
-    for p in ['P1','P2','P3','P4','P5']:
-        pdata = rule1_trades[rule1_trades['period'] == p]
-        if len(pdata) > 0:
-            pct = (pdata['result'] == 'WIN').sum() / len(pdata) * 100
-            status = 'PASS' if pct > 52 else 'FAIL'
-            if pct > 52: passes += 1
-            print(f'  {p}: {pct:.1f}% (n={len(pdata)}) [{status}]')
-    print(f'  Result: {passes}/5 periods pass')
+    # SHORT trade parameters (fixed dollar values)
+    short_target = entry - 5.0    # $5 target
+    short_stop = entry + 2.5      # $2.5 stop
     
-    # Save Rule 1 trades
-    rule1_output = rule1_trades[['Datetime', 'session', 'direction', 'entry_price', 'target_price', 'stop_price', 'rf_prob', 'result']].copy()
-    rule1_output['Datetime'] = rule1_output['Datetime'].dt.strftime('%Y-%m-%d %H:%M')
-    rule1_output['rf_prob'] = rule1_output['rf_prob'].round(3)
-    rule1_output['entry_price'] = rule1_output['entry_price'].round(2)
-    rule1_output.to_csv('data/processed/RULE1_trades.csv', index=False)
-    print(f'\nSaved: data/processed/RULE1_trades.csv')
-else:
-    print('\nNo trades found matching Rule 1 conditions.')
-
-# ============================================================================
-# RULE 2: Same as Rule 1 but NY_OVERLAP session only
-# ============================================================================
-print('\n' + '-'*80)
-print('RULE 2: Bullish Continuation (NY_OVERLAP Only)')
-print('-'*80)
-print('Conditions:')
-print('  - RF Probability: 0.80 - 0.90')
-print('  - Last 3 bars: ALL UP (up_count_3 == 3)')
-print('  - Current bar: BIG BODY (> 1.5x 10-bar avg)')
-print('  - Close position: > 0.7 (close near high)')
-print('  - Sessions: NY_OVERLAP ONLY (13:00-17:00 UTC)')
-
-rule2_cond = (
-    (movement['rf_prob'] >= 0.80) & 
-    (movement['rf_prob'] < 0.90) & 
-    (movement['all_up_3'] == 1) & 
-    (movement['big_body'] == 1) & 
-    (movement['close_position'] > 0.7) &
-    (movement['session'] == 'NY_OVERLAP')
-)
-
-rule2_trades = movement[rule2_cond].copy()
-rule2_trades['result'] = rule2_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
-rule2_trades['direction'] = 'LONG'
-rule2_trades['entry_price'] = rule2_trades['Close']
-rule2_trades['target_price'] = (rule2_trades['Close'] * 1.001).round(2)
-rule2_trades['stop_price'] = (rule2_trades['Close'] * 0.9995).round(2)
-
-if len(rule2_trades) > 0:
-    wins = (rule2_trades['result'] == 'WIN').sum()
-    losses = (rule2_trades['result'] == 'LOSS').sum()
-    win_rate = wins / len(rule2_trades) * 100
+    # Determine outcome based on actual market movement
+    # outcome: 1 = LONG wins, 2 = SHORT wins, 0 = no clear direction
     
-    print(f'\nResults:')
-    print(f'  Total trades: {len(rule2_trades)}')
-    print(f'  Wins: {wins}')
-    print(f'  Losses: {losses}')
-    print(f'  Win Rate: {win_rate:.1f}%')
-    print(f'  Expected Value: {(win_rate/100 * 2) - ((1 - win_rate/100) * 1):.2f}R per trade')
+    if row['outcome'] == 1:
+        # Market went up - LONG wins, SHORT stopped
+        surviving_side = 'LONG'
+        cancelled_side = 'SHORT'
+        result = 'WIN'
+    elif row['outcome'] == 2:
+        # Market went down - SHORT wins, LONG stopped
+        surviving_side = 'SHORT'
+        cancelled_side = 'LONG'
+        result = 'WIN'
+    else:
+        # No clear direction - both could have been stopped or neither hit target
+        surviving_side = 'BOTH_STOPPED'
+        cancelled_side = 'BOTH_STOPPED'
+        result = 'LOSS'
     
-    # Save Rule 2 trades
-    rule2_output = rule2_trades[['Datetime', 'session', 'direction', 'entry_price', 'target_price', 'stop_price', 'rf_prob', 'result']].copy()
-    rule2_output['Datetime'] = rule2_output['Datetime'].dt.strftime('%Y-%m-%d %H:%M')
-    rule2_output['rf_prob'] = rule2_output['rf_prob'].round(3)
-    rule2_output['entry_price'] = rule2_output['entry_price'].round(2)
-    rule2_output.to_csv('data/processed/RULE2_trades.csv', index=False)
-    print(f'\nSaved: data/processed/RULE2_trades.csv')
-else:
-    print('\nNo trades found matching Rule 2 conditions.')
+    hedge_results.append({
+        'Datetime': row['Datetime'],
+        'session': row['session'],
+        'rf_prob': row['rf_prob'],
+        'entry': entry,
+        'surviving_side': surviving_side,
+        'cancelled_side': cancelled_side,
+        'result': result,
+        'outcome': row['outcome']
+    })
 
-# Print sample trades
-if len(rule1_trades) > 0:
-    print('\n' + '-'*80)
-    print('RULE 1 SAMPLE TRADES (first 10)')
-    print('-'*80)
-    sample = rule1_output.head(10)
-    print(sample.to_string(index=False))
+# Convert to DataFrame
+hedge_df = pd.DataFrame(hedge_results)
 
-if len(rule2_trades) > 0:
-    print('\n' + '-'*80)
-    print('RULE 2 SAMPLE TRADES (all)')
-    print('-'*80)
-    print(rule2_output.to_string(index=False))
-
-# ============================================================================
-# RULE 3: RF >= 0.70 + Bullish Pattern (Exclude LONDON)
-# ============================================================================
-print('\n' + '-'*80)
-print('RULE 3: RF >= 0.70 + Bullish Pattern (Exclude LONDON)')
-print('-'*80)
-print('Conditions:')
-print('  - RF Probability: >= 0.70')
-print('  - Last 3 bars: ALL UP (up_count_3 == 3)')
-print('  - Current bar: BIG BODY (> 1.5x 10-bar avg)')
-print('  - Close position: > 0.7 (close near high)')
-print('  - Sessions: ASIAN, NY_OVERLAP, NY (exclude LONDON, LATE)')
-
-rule3_cond = (
-    (movement['rf_prob'] >= 0.70) & 
-    (movement['all_up_3'] == 1) & 
-    (movement['big_body'] == 1) & 
-    (movement['close_position'] > 0.7) &
-    (movement['session'].isin(['ASIAN', 'NY_OVERLAP', 'NY']))
-)
-
-rule3_trades = movement[rule3_cond].copy()
-rule3_trades['result'] = rule3_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
-rule3_trades['direction'] = 'LONG'
-rule3_trades['entry_price'] = rule3_trades['Close']
-rule3_trades['target_price'] = (rule3_trades['Close'] * 1.001).round(2)
-rule3_trades['stop_price'] = (rule3_trades['Close'] * 0.9995).round(2)
-
-if len(rule3_trades) > 0:
-    wins = (rule3_trades['result'] == 'WIN').sum()
-    losses = (rule3_trades['result'] == 'LOSS').sum()
-    win_rate = wins / len(rule3_trades) * 100
+if len(hedge_df) > 0:
+    print(f'\nTotal hedged setups: {len(hedge_df)}')
     
-    print(f'\nResults:')
-    print(f'  Total trades: {len(rule3_trades)}')
-    print(f'  Wins: {wins}')
-    print(f'  Losses: {losses}')
-    print(f'  Win Rate: {win_rate:.1f}%')
-    print(f'  Expected Value: {(win_rate/100 * 2) - ((1 - win_rate/100) * 1):.2f}R per trade')
+    # Performance metrics
+    wins = (hedge_df['result'] == 'WIN').sum()
+    losses = len(hedge_df) - wins
+    win_rate = wins / len(hedge_df) * 100
     
-    # Walk-forward validation
-    rule3_trades['period'] = pd.cut(range(len(rule3_trades)), bins=5, labels=['P1','P2','P3','P4','P5'])
-    print(f'\nWalk-forward validation:')
-    passes = 0
-    for p in ['P1','P2','P3','P4','P5']:
-        pdata = rule3_trades[rule3_trades['period'] == p]
-        if len(pdata) > 0:
-            pct = (pdata['result'] == 'WIN').sum() / len(pdata) * 100
-            status = 'PASS' if pct > 52 else 'FAIL'
-            if pct > 52: passes += 1
-            print(f'  {p}: {pct:.1f}% (n={len(pdata)}) [{status}]')
-    print(f'  Result: {passes}/5 periods pass')
+    print(f'\n--- OVERALL PERFORMANCE ---')
+    print(f'Total setups: {len(hedge_df)}')
+    print(f'Wins: {wins}')
+    print(f'Losses: {losses}')
+    print(f'Win Rate: {win_rate:.1f}%')
+    
+    # Net P&L calculation
+    # Each setup costs: 1 stop loss (losing side) = -1R
+    # Each win gains: 1 target (winning side) = +2R
+    # Net per winning setup: +2R - 1R = +1R
+    # Net per losing setup: -1R (both stopped or neither hit)
+    
+    total_pnl = wins * 1 + losses * (-1)
+    avg_pnl = total_pnl / len(hedge_df)
+    
+    print(f'\nNet P&L: {total_pnl}R')
+    print(f'Average per setup: {avg_pnl:.3f}R')
+    print(f'Expected Value: {avg_pnl:.3f}R per setup')
+    
+    # Breakdown by surviving side
+    print(f'\n--- SURVIVING SIDE BREAKDOWN ---')
+    for side in ['LONG', 'SHORT', 'BOTH_STOPPED']:
+        side_trades = hedge_df[hedge_df['surviving_side'] == side]
+        if len(side_trades) > 0:
+            count = len(side_trades)
+            pct = count / len(hedge_df) * 100
+            print(f'{side:<15} {count:>6} ({pct:>5.1f}%)')
     
     # Session breakdown
-    print(f'\nSession breakdown:')
-    for sess in ['ASIAN', 'NY_OVERLAP', 'NY']:
-        sess_trades = rule3_trades[rule3_trades['session'] == sess]
-        if len(sess_trades) > 0:
-            sess_wins = (sess_trades['result'] == 'WIN').sum()
-            sess_wr = sess_wins / len(sess_trades) * 100
-            print(f'  {sess:<12} {sess_wr:>5.1f}% ({sess_wins}W/{len(sess_trades)-sess_wins}L, n={len(sess_trades)})')
+    print(f'\n--- SESSION BREAKDOWN ---')
+    for sess in hedge_df['session'].unique():
+        sess_data = hedge_df[hedge_df['session'] == sess]
+        sess_wins = (sess_data['result'] == 'WIN').sum()
+        sess_losses = len(sess_data) - sess_wins
+        sess_wr = sess_wins / len(sess_data) * 100 if len(sess_data) > 0 else 0
+        sess_pnl = sess_wins * 1 + sess_losses * (-1)
+        print(f'{sess:<12} Setups: {len(sess_data):<6} WR: {sess_wr:>5.1f}% P&L: {sess_pnl:>6}R')
     
-    # Save Rule 3 trades
-    rule3_output = rule3_trades[['Datetime', 'session', 'direction', 'entry_price', 'target_price', 'stop_price', 'rf_prob', 'result']].copy()
-    rule3_output['Datetime'] = rule3_output['Datetime'].dt.strftime('%Y-%m-%d %H:%M')
-    rule3_output['rf_prob'] = rule3_output['rf_prob'].round(3)
-    rule3_output['entry_price'] = rule3_output['entry_price'].round(2)
-    rule3_output.to_csv('data/processed/RULE3_trades.csv', index=False)
-    print(f'\nSaved: data/processed/RULE3_trades.csv')
+    # Save results
+    hedge_df['Datetime'] = hedge_df['Datetime'].dt.strftime('%Y-%m-%d %H:%M')
+    hedge_df['rf_prob'] = hedge_df['rf_prob'].round(3)
+    hedge_df['entry'] = hedge_df['entry'].round(2)
+    hedge_df.to_csv('data/processed/HEDGE_strategy.csv', index=False)
+    print(f'\nSaved: data/processed/HEDGE_strategy.csv')
     
     # Show sample trades
-    print('\n' + '-'*80)
-    print('RULE 3 SAMPLE TRADES (first 15)')
-    print('-'*80)
-    print(rule3_output.head(15).to_string(index=False))
+    print('\n--- SAMPLE HEDGE SETUPS (first 20) ---')
+    print(hedge_df.head(20).to_string(index=False))
 else:
-    print('\nNo trades found matching Rule 3 conditions.')
-
-# ============================================================================
-# RULE 4: RF >= 0.70 + Bullish Pattern + NY_OVERLAP ONLY
-# ============================================================================
-print('\n' + '-'*80)
-print('RULE 4: RF >= 0.70 + Bullish Pattern (NY_OVERLAP ONLY)')
-print('-'*80)
-print('Conditions:')
-print('  - RF Probability: >= 0.70')
-print('  - Last 3 bars: ALL UP (up_count_3 == 3)')
-print('  - Current bar: BIG BODY (> 1.5x 10-bar avg)')
-print('  - Close position: > 0.7 (close near high)')
-print('  - Sessions: NY_OVERLAP ONLY (13:00-17:00 UTC)')
-
-rule4_cond = (
-    (movement['rf_prob'] >= 0.7) & 
-    (movement['all_up_3'] == 1) & 
-    (movement['big_body'] == 1) & 
-    (movement['close_position'] > 0.7) &
-    (movement['session'] == 'NY_OVERLAP')
-)
-
-rule4_trades = movement[rule4_cond].copy()
-rule4_trades['result'] = rule4_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
-rule4_trades['direction'] = 'LONG'
-rule4_trades['entry_price'] = rule4_trades['Close']
-rule4_trades['target_price'] = (rule4_trades['Close'] * 1.001).round(2)
-rule4_trades['stop_price'] = (rule4_trades['Close'] * 0.9995).round(2)
-
-if len(rule4_trades) > 0:
-    wins = (rule4_trades['result'] == 'WIN').sum()
-    losses = (rule4_trades['result'] == 'LOSS').sum()
-    win_rate = wins / len(rule4_trades) * 100
-    
-    print(f'\nResults:')
-    print(f'  Total trades: {len(rule4_trades)}')
-    print(f'  Wins: {wins}')
-    print(f'  Losses: {losses}')
-    print(f'  Win Rate: {win_rate:.1f}%')
-    print(f'  Expected Value: {(win_rate/100 * 2) - ((1 - win_rate/100) * 1):.2f}R per trade')
-    
-    # Walk-forward validation
-    if len(rule4_trades) >= 5:
-        rule4_trades['period'] = pd.cut(range(len(rule4_trades)), bins=5, labels=['P1','P2','P3','P4','P5'])
-        print(f'\nWalk-forward validation:')
-        passes = 0
-        for p in ['P1','P2','P3','P4','P5']:
-            pdata = rule4_trades[rule4_trades['period'] == p]
-            if len(pdata) > 0:
-                pct = (pdata['result'] == 'WIN').sum() / len(pdata) * 100
-                status = 'PASS' if pct > 52 else 'FAIL'
-                if pct > 52: passes += 1
-                print(f'  {p}: {pct:.1f}% (n={len(pdata)}) [{status}]')
-        print(f'  Result: {passes}/5 periods pass')
-    
-    # Save Rule 4 trades
-    rule4_output = rule4_trades[['Datetime', 'session', 'direction', 'entry_price', 'target_price', 'stop_price', 'rf_prob', 'result']].copy()
-    rule4_output['Datetime'] = rule4_output['Datetime'].dt.strftime('%Y-%m-%d %H:%M')
-    rule4_output['rf_prob'] = rule4_output['rf_prob'].round(3)
-    rule4_output['entry_price'] = rule4_output['entry_price'].round(2)
-    rule4_output.to_csv('data/processed/RULE4_trades.csv', index=False)
-    print(f'\nSaved: data/processed/RULE4_trades.csv')
-    
-    # Show all trades
-    print('\n' + '-'*80)
-    print('RULE 4 ALL TRADES')
-    print('-'*80)
-    print(rule4_output.to_string(index=False))
-else:
-    print('\nNo trades found matching Rule 4 conditions.')
+    print('\nNo hedge setups generated.')
 
 print('\n' + '='*80)
 print('ANALYSIS COMPLETE')

@@ -69,7 +69,7 @@ def create_microstructure_features(df):
     
     return df.dropna()
 
-def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
+def label_outcomes(df, horizon=15, target=0.0015, stop=0.0005):
     df = df.copy()
     outcomes = []
     
@@ -106,7 +106,7 @@ def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
     return df
 
 print('='*80)
-print('US30 1MIN FEATURE CORRELATION ANALYSIS')
+print('XAUUSD 1MIN FEATURE CORRELATION ANALYSIS')
 print('='*80)
 
 print('\nLoading data...')
@@ -119,10 +119,127 @@ df = df[['Open','High','Low','Close']].copy()  # Keep only OHLC
 print(f'Loaded {len(df)} bars (1-minute timeframe)')
 
 print('\nEngineering features...')
-df = create_microstructure_features(df)
+df_base = create_microstructure_features(df)
 
-print('\nLabeling outcomes (20 bars=20mins, 0.1% target, 0.05% stop)...')
-df = label_outcomes(df, 20, 0.001, 0.0005)
+# ============================================================================
+# TARGET AND STOP LOSS OPTIMIZATION
+# ============================================================================
+print('\n' + '='*80)
+print('TARGET AND STOP LOSS OPTIMIZATION')
+print('='*80)
+
+# Define horizons to test (in bars/minutes)
+horizons = [15, 20, 30, 40, 60]
+
+# Define target:stop ratios and values to test
+test_configs = [
+    # Risk:Reward 2:1 (standard)
+    {'target': 0.001, 'stop': 0.0005, 'name': '0.10%:0.05% (2:1)'},
+    {'target': 0.0015, 'stop': 0.00075, 'name': '0.15%:0.075% (2:1)'},
+    {'target': 0.002, 'stop': 0.001, 'name': '0.20%:0.10% (2:1)'},
+    {'target': 0.003, 'stop': 0.0015, 'name': '0.30%:0.15% (2:1)'},
+    
+    # Risk:Reward 3:1
+    {'target': 0.0015, 'stop': 0.0005, 'name': '0.15%:0.05% (3:1)'},
+    {'target': 0.003, 'stop': 0.001, 'name': '0.30%:0.10% (3:1)'},
+    
+    # Risk:Reward 1.5:1
+    {'target': 0.00075, 'stop': 0.0005, 'name': '0.075%:0.05% (1.5:1)'},
+    {'target': 0.0015, 'stop': 0.001, 'name': '0.15%:0.10% (1.5:1)'},
+    
+    # Tight stops
+    {'target': 0.001, 'stop': 0.00025, 'name': '0.10%:0.025% (4:1)'},
+    {'target': 0.0005, 'stop': 0.00025, 'name': '0.05%:0.025% (2:1)'},
+]
+
+optimization_results = []
+
+for horizon in horizons:
+    print(f'\n--- Testing Horizon: {horizon} bars ({horizon} mins) ---')
+    
+    for config in test_configs:
+        target = config['target']
+        stop = config['stop']
+        name = config['name']
+        
+        print(f'  Testing {name}...', end='', flush=True)
+        
+        # Label outcomes for this configuration
+        df_test = label_outcomes(df_base.copy(), horizon, target, stop)
+        
+        # Calculate metrics
+        total_bars = len(df_test)
+        movement_trades = (df_test['outcome'] != 0).sum()
+        success_rate = (movement_trades / total_bars * 100) if total_bars > 0 else 0
+        
+        # Calculate R:R ratio
+        rr_ratio = target / stop if stop > 0 else 0
+        
+        # Calculate Expected Value per trade
+        # EV = (WinRate * R:R) - (LossRate * 1)
+        win_rate_pct = success_rate / 100
+        loss_rate_pct = 1 - win_rate_pct
+        expected_value = (win_rate_pct * rr_ratio) - (loss_rate_pct * 1)
+        
+        # Calculate trade frequency
+        trade_frequency = (movement_trades / total_bars * 100) if total_bars > 0 else 0
+        
+        # Efficiency score = EV * sqrt(frequency) to balance profitability with opportunity
+        efficiency_score = expected_value * np.sqrt(trade_frequency)
+        
+        optimization_results.append({
+            'horizon': horizon,
+            'target': target,
+            'stop': stop,
+            'config_name': name,
+            'rr_ratio': rr_ratio,
+            'success_rate': success_rate,
+            'movement_trades': movement_trades,
+            'trade_frequency': trade_frequency,
+            'expected_value': expected_value,
+            'efficiency_score': efficiency_score
+        })
+        
+        print(f' Success: {success_rate:.1f}%, EV: {expected_value:.3f}R, Efficiency: {efficiency_score:.3f}')
+
+# Convert to DataFrame and sort by efficiency
+results_df = pd.DataFrame(optimization_results)
+results_df = results_df.sort_values('efficiency_score', ascending=False)
+
+print('\n' + '='*80)
+print('OPTIMIZATION RESULTS - RANKED BY EFFICIENCY')
+print('='*80)
+print(f'\n{"Rank":<5} {"Horizon":<8} {"Target:Stop":<20} {"R:R":<6} {"Success%":<10} {"Trades":<8} {"Freq%":<8} {"EV (R)":<8} {"Efficiency"}')
+print('-'*100)
+
+for idx, row in results_df.iterrows():
+    rank = results_df.index.get_loc(idx) + 1
+    print(f'{rank:<5} {row["horizon"]:<8} {row["config_name"]:<20} {row["rr_ratio"]:<6.1f} {row["success_rate"]:<10.1f} {row["movement_trades"]:<8} {row["trade_frequency"]:<8.2f} {row["expected_value"]:<8.3f} {row["efficiency_score"]:<8.3f}')
+
+# Show top 5 configurations
+print('\n' + '='*80)
+print('TOP 5 MOST EFFICIENT CONFIGURATIONS')
+print('='*80)
+
+for i, (idx, row) in enumerate(results_df.head(5).iterrows(), 1):
+    print(f'\n#{i}. {row["config_name"]} with {row["horizon"]} bar horizon')
+    print(f'    Target: {row["target"]*100:.3f}%, Stop: {row["stop"]*100:.3f}%')
+    print(f'    Risk:Reward Ratio: {row["rr_ratio"]:.2f}:1')
+    print(f'    Success Rate: {row["success_rate"]:.2f}%')
+    print(f'    Trade Frequency: {row["trade_frequency"]:.2f}% ({row["movement_trades"]} trades)')
+    print(f'    Expected Value: {row["expected_value"]:.3f}R per trade')
+    print(f'    Efficiency Score: {row["efficiency_score"]:.3f}')
+
+# Use the best configuration for further analysis
+best_config = results_df.iloc[0]
+print(f'\n' + '='*80)
+print(f'USING BEST CONFIGURATION FOR REMAINING ANALYSIS')
+print('='*80)
+print(f'Configuration: {best_config["config_name"]}')
+print(f'Horizon: {best_config["horizon"]} bars')
+print(f'Target: {best_config["target"]*100:.3f}%, Stop: {best_config["stop"]*100:.3f}%')
+
+df = label_outcomes(df_base, int(best_config['horizon']), best_config['target'], best_config['stop'])
 
 # Create combination features on full dataset
 print('\nCreating combination features...')
@@ -379,17 +496,17 @@ print('='*80)
 import pickle
 os.makedirs('models', exist_ok=True)
 
-with open('models/logistic_regression_us30.pkl', 'wb') as f:
+with open('models/logistic_regression.pkl', 'wb') as f:
     pickle.dump(lr, f)
-print('Saved: models/logistic_regression_us30.pkl')
+print('Saved: models/logistic_regression.pkl')
 
-with open('models/random_forest_us30.pkl', 'wb') as f:
+with open('models/random_forest.pkl', 'wb') as f:
     pickle.dump(rf, f)
-print('Saved: models/random_forest_us30.pkl')
+print('Saved: models/random_forest.pkl')
 
-with open('models/scaler_us30.pkl', 'wb') as f:
+with open('models/scaler.pkl', 'wb') as f:
     pickle.dump(scaler, f)
-print('Saved: models/scaler_us30.pkl')
+print('Saved: models/scaler.pkl')
 
 # Save feature names for reference
 with open('models/feature_names.txt', 'w') as f:
@@ -420,8 +537,8 @@ if len(successful) > 0:
             median = successful[feat].median()
             print(f'{feat:<25} Median: {median:>8.4f}  Range: {min_val:>8.4f} to {max_val:>8.4f}')
 
-test.to_csv('data/processed/US30_feature_analysis.csv')
-print(f'\nSaved test results: data/processed/US30_feature_analysis.csv')
+test.to_csv('data/processed/XAUUSD1_feature_analysis.csv')
+print(f'\nSaved test results: data/processed/XAUUSD1_feature_analysis.csv')
 
 # ============================================================================
 # BULLISH CONTINUATION TRADING RULES
@@ -680,7 +797,7 @@ print('  - Close position: > 0.7 (close near high)')
 print('  - Sessions: NY_OVERLAP ONLY (13:00-17:00 UTC)')
 
 rule4_cond = (
-    (movement['rf_prob'] >= 0.7) & 
+    (movement['rf_prob'] >= 0.70) & 
     (movement['all_up_3'] == 1) & 
     (movement['big_body'] == 1) & 
     (movement['close_position'] > 0.7) &

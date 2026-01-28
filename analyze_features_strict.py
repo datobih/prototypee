@@ -69,7 +69,8 @@ def create_microstructure_features(df):
     
     return df.dropna()
 
-def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
+def label_outcomes(df, horizon=15, target=5.0, stop=2.5):
+    """Label outcomes using fixed dollar SL/TP (not percentage-based)"""
     df = df.copy()
     outcomes = []
     
@@ -80,23 +81,23 @@ def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
         entry = df['Close'].iloc[i]
         future = df.iloc[i+1:i+horizon+1]
         
-        # Check LONG
+        # Check LONG (fixed dollar targets)
         long_hit = False
         for h, l in zip(future['High'], future['Low']):
-            if h >= entry * (1 + target):
+            if h >= entry + target:  # TP hit
                 long_hit = True
                 break
-            if l <= entry * (1 - stop):
+            if l <= entry - stop:  # SL hit
                 break
         
-        # Check SHORT
+        # Check SHORT (fixed dollar targets)
         short_hit = False
         if not long_hit:
             for h, l in zip(future['High'], future['Low']):
-                if l <= entry * (1 - target):
+                if l <= entry - target:  # TP hit
                     short_hit = True
                     break
-                if h >= entry * (1 + stop):
+                if h >= entry + stop:  # SL hit
                     break
         
         outcomes.append(1 if long_hit else (2 if short_hit else 0))
@@ -106,12 +107,12 @@ def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
     return df
 
 print('='*80)
-print('US30 1MIN FEATURE CORRELATION ANALYSIS')
+print('XAUUSD 1MIN FEATURE CORRELATION ANALYSIS')
 print('='*80)
 
 print('\nLoading data...')
 # New format: Date, Time, Open, High, Low, Close, TickVol, Vol, Spread
-df = pd.read_csv('data/raw/US30.csv', sep='\t', 
+df = pd.read_csv('data/raw/XAUUSD1.csv', sep='\t', 
                  names=['Date','Time','Open','High','Low','Close','TickVol','Vol','Spread'])
 df['Datetime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], format='%Y.%m.%d %H:%M:%S')
 df.set_index('Datetime', inplace=True)
@@ -121,8 +122,8 @@ print(f'Loaded {len(df)} bars (1-minute timeframe)')
 print('\nEngineering features...')
 df = create_microstructure_features(df)
 
-print('\nLabeling outcomes (20 bars=20mins, 0.1% target, 0.05% stop)...')
-df = label_outcomes(df, 20, 0.001, 0.0005)
+print('\nLabeling outcomes (20 bars=20mins, $5 target, $2.5 stop)...')
+df = label_outcomes(df, 20, 5.0, 2.5)
 
 # Create combination features on full dataset
 print('\nCreating combination features...')
@@ -379,17 +380,17 @@ print('='*80)
 import pickle
 os.makedirs('models', exist_ok=True)
 
-with open('models/logistic_regression_us30.pkl', 'wb') as f:
+with open('models/logistic_regression.pkl', 'wb') as f:
     pickle.dump(lr, f)
-print('Saved: models/logistic_regression_us30.pkl')
+print('Saved: models/logistic_regression.pkl')
 
-with open('models/random_forest_us30.pkl', 'wb') as f:
+with open('models/random_forest.pkl', 'wb') as f:
     pickle.dump(rf, f)
-print('Saved: models/random_forest_us30.pkl')
+print('Saved: models/random_forest.pkl')
 
-with open('models/scaler_us30.pkl', 'wb') as f:
+with open('models/scaler.pkl', 'wb') as f:
     pickle.dump(scaler, f)
-print('Saved: models/scaler_us30.pkl')
+print('Saved: models/scaler.pkl')
 
 # Save feature names for reference
 with open('models/feature_names.txt', 'w') as f:
@@ -420,8 +421,8 @@ if len(successful) > 0:
             median = successful[feat].median()
             print(f'{feat:<25} Median: {median:>8.4f}  Range: {min_val:>8.4f} to {max_val:>8.4f}')
 
-test.to_csv('data/processed/US30_feature_analysis.csv')
-print(f'\nSaved test results: data/processed/US30_feature_analysis.csv')
+test.to_csv('data/processed/XAUUSD1_feature_analysis.csv')
+print(f'\nSaved test results: data/processed/XAUUSD1_feature_analysis.csv')
 
 # ============================================================================
 # BULLISH CONTINUATION TRADING RULES
@@ -485,8 +486,8 @@ rule1_trades = movement[rule1_cond].copy()
 rule1_trades['result'] = rule1_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
 rule1_trades['direction'] = 'LONG'
 rule1_trades['entry_price'] = rule1_trades['Close']
-rule1_trades['target_price'] = (rule1_trades['Close'] * 1.001).round(2)
-rule1_trades['stop_price'] = (rule1_trades['Close'] * 0.9995).round(2)
+rule1_trades['target_price'] = (rule1_trades['Close'] + 5.0).round(2)
+rule1_trades['stop_price'] = (rule1_trades['Close'] - 2.5).round(2)
 
 if len(rule1_trades) > 0:
     wins = (rule1_trades['result'] == 'WIN').sum()
@@ -549,8 +550,8 @@ rule2_trades = movement[rule2_cond].copy()
 rule2_trades['result'] = rule2_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
 rule2_trades['direction'] = 'LONG'
 rule2_trades['entry_price'] = rule2_trades['Close']
-rule2_trades['target_price'] = (rule2_trades['Close'] * 1.001).round(2)
-rule2_trades['stop_price'] = (rule2_trades['Close'] * 0.9995).round(2)
+rule2_trades['target_price'] = (rule2_trades['Close'] + 5.0).round(2)
+rule2_trades['stop_price'] = (rule2_trades['Close'] - 2.5).round(2)
 
 if len(rule2_trades) > 0:
     wins = (rule2_trades['result'] == 'WIN').sum()
@@ -613,8 +614,8 @@ rule3_trades = movement[rule3_cond].copy()
 rule3_trades['result'] = rule3_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
 rule3_trades['direction'] = 'LONG'
 rule3_trades['entry_price'] = rule3_trades['Close']
-rule3_trades['target_price'] = (rule3_trades['Close'] * 1.001).round(2)
-rule3_trades['stop_price'] = (rule3_trades['Close'] * 0.9995).round(2)
+rule3_trades['target_price'] = (rule3_trades['Close'] + 5.0).round(2)
+rule3_trades['stop_price'] = (rule3_trades['Close'] - 2.5).round(2)
 
 if len(rule3_trades) > 0:
     wins = (rule3_trades['result'] == 'WIN').sum()
@@ -680,7 +681,7 @@ print('  - Close position: > 0.7 (close near high)')
 print('  - Sessions: NY_OVERLAP ONLY (13:00-17:00 UTC)')
 
 rule4_cond = (
-    (movement['rf_prob'] >= 0.7) & 
+    (movement['rf_prob'] >= 0.70) & 
     (movement['all_up_3'] == 1) & 
     (movement['big_body'] == 1) & 
     (movement['close_position'] > 0.7) &
@@ -691,8 +692,8 @@ rule4_trades = movement[rule4_cond].copy()
 rule4_trades['result'] = rule4_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
 rule4_trades['direction'] = 'LONG'
 rule4_trades['entry_price'] = rule4_trades['Close']
-rule4_trades['target_price'] = (rule4_trades['Close'] * 1.001).round(2)
-rule4_trades['stop_price'] = (rule4_trades['Close'] * 0.9995).round(2)
+rule4_trades['target_price'] = (rule4_trades['Close'] + 5.0).round(2)
+rule4_trades['stop_price'] = (rule4_trades['Close'] - 2.5).round(2)
 
 if len(rule4_trades) > 0:
     wins = (rule4_trades['result'] == 'WIN').sum()

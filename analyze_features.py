@@ -69,7 +69,7 @@ def create_microstructure_features(df):
     
     return df.dropna()
 
-def label_outcomes(df, horizon=15, target=0.0015, stop=0.0005):
+def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
     df = df.copy()
     outcomes = []
     
