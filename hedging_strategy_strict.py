@@ -7,6 +7,14 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, roc_auc_score
 import sys, os
 
+# =============================================================================
+# CONFIGURABLE PARAMETERS - Modify these values as needed
+# =============================================================================
+TARGET = 5.0        # Target profit in dollars (e.g., 5.0 = $5)
+STOP = 2.5          # Stop loss in dollars (e.g., 2.5 = $2.5)
+HORIZON = 30        # Number of bars to look ahead for outcome
+RF_THRESHOLD = 0.70 # Random Forest probability threshold for hedge entry
+
 def create_microstructure_features(df):
     df = df.copy()
     
@@ -122,8 +130,8 @@ print(f'Loaded {len(df)} bars (1-minute timeframe)')
 print('\nEngineering features...')
 df = create_microstructure_features(df)
 
-print('\nLabeling outcomes (20 bars=20mins, $5 target, $2.5 stop)...')
-df = label_outcomes(df, 20, 5.0, 2.5)
+print(f'\nLabeling outcomes ({HORIZON} bars, ${TARGET} target, ${STOP} stop)...')
+df = label_outcomes(df, HORIZON, TARGET, STOP)
 
 # Create combination features on full dataset
 print('\nCreating combination features...')
@@ -428,9 +436,9 @@ print(f'\nSaved test results: data/processed/XAUUSD1_feature_analysis.csv')
 # HEDGING STRATEGY - FORWARD TEST
 # ============================================================================
 print('\n' + '='*80)
-print('HEDGING STRATEGY - FORWARD TEST (RF >= 0.70)')
+print(f'HEDGING STRATEGY - FORWARD TEST (RF >= {RF_THRESHOLD})')
 print('='*80)
-print('Logic: Take BOTH LONG and SHORT when RF >= 0.70')
+print(f'Logic: Take BOTH LONG and SHORT when RF >= {RF_THRESHOLD}')
 print('       Cancel whichever side hits stop loss first')
 print('       Keep the surviving trade until target/stop')
 
@@ -452,11 +460,11 @@ def get_session(hour):
 
 test_hedge['session'] = test_hedge['hour'].apply(get_session)
 
-# Filter for high probability setups (RF >= 0.70)
-hedge_setups = test_hedge[test_hedge['rf_prob'] >= 0.70].copy()
+# Filter for high probability setups (RF >= RF_THRESHOLD)
+hedge_setups = test_hedge[test_hedge['rf_prob'] >= RF_THRESHOLD].copy()
 
 print(f'\nTotal test bars: {len(test_hedge)}')
-print(f'High probability setups (RF >= 0.70): {len(hedge_setups)} ({len(hedge_setups)/len(test_hedge)*100:.2f}%)')
+print(f'High probability setups (RF >= {RF_THRESHOLD}): {len(hedge_setups)} ({len(hedge_setups)/len(test_hedge)*100:.2f}%)')
 
 # For each setup, determine which side survives and which gets stopped out
 hedge_results = []
@@ -465,12 +473,12 @@ for idx, row in hedge_setups.iterrows():
     entry = row['Close']
     
     # LONG trade parameters (fixed dollar values)
-    long_target = entry + 5.0     # $5 target
-    long_stop = entry - 2.5       # $2.5 stop
+    long_target = entry + TARGET     # $TARGET target
+    long_stop = entry - STOP         # $STOP stop
     
     # SHORT trade parameters (fixed dollar values)
-    short_target = entry - 5.0    # $5 target
-    short_stop = entry + 2.5      # $2.5 stop
+    short_target = entry - TARGET    # $TARGET target
+    short_stop = entry + STOP        # $STOP stop
     
     # Determine outcome based on actual market movement
     # outcome: 1 = LONG wins, 2 = SHORT wins, 0 = no clear direction

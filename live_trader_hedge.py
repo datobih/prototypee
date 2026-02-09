@@ -1,6 +1,6 @@
 """
 XAUUSD Live Hedge Trader using MetaTrader 5
-Strategy: Take BOTH LONG and SHORT when RF >= 0.70
+Strategy: Take BOTH LONG and SHORT when RF >= 0.80
           Cancel whichever side hits stop loss first
           Let surviving side run to target
 
@@ -32,10 +32,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # MT5 Configuration
-SYMBOL = 'XAUUSDm'  # Adjust suffix based on your broker
+SYMBOL = 'XAUUSDb'  # Adjust suffix based on your broker
 TIMEFRAME = mt5.TIMEFRAME_M1
 LOOKBACK_BARS = 100  # Need enough bars for rolling calculations (ema_21, atr_20, etc.)
-MAX_HEDGE_PAIRS = 3  # Maximum simultaneous hedge pairs
+MAX_HEDGE_PAIRS = 2  # Maximum simultaneous hedge pairs
 LOT_SIZE = 0.01  # Fixed lot size (same as live_trader.py)
 TARGET_DOLLARS = 5.0  # $5 target (fixed)
 STOP_DOLLARS = 2.5  # $2.5 stop (fixed)
@@ -233,8 +233,28 @@ def get_active_hedge_count():
     """Count active hedge pairs"""
     return len(get_hedge_pairs())
 
+def get_filling_mode():
+    """Auto-detect the correct filling mode for the symbol"""
+    info = mt5.symbol_info(SYMBOL)
+    if info is None:
+        logger.error(f"Cannot get symbol info for {SYMBOL} — skipping trade")
+        return None
+    filling = info.filling_mode
+    # filling_mode is a bitmask: bit 0 (1) = FOK, bit 1 (2) = IOC
+    if filling & 1:  # FOK supported
+        return mt5.ORDER_FILLING_FOK
+    elif filling & 2:  # IOC supported
+        return mt5.ORDER_FILLING_IOC
+    else:
+        logger.error(f"Neither FOK nor IOC supported (filling_mode={filling}) — skipping trade")
+        return None
+
 def place_hedge_orders(entry_price, volume):
     """Place both LONG and SHORT orders simultaneously"""
+    
+    filling_mode = get_filling_mode()
+    if filling_mode is None:
+        return False
     
     # LONG order (fixed dollar SL/TP)
     long_sl = entry_price - STOP_DOLLARS
@@ -251,7 +271,7 @@ def place_hedge_orders(entry_price, volume):
         "magic": MAGIC_NUMBER_LONG,
         "comment": f"HEDGE_LONG_{int(time.time())}",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": filling_mode,
     }
     
     # SHORT order (fixed dollar SL/TP)
@@ -269,7 +289,7 @@ def place_hedge_orders(entry_price, volume):
         "magic": MAGIC_NUMBER_SHORT,
         "comment": f"HEDGE_SHORT_{int(time.time())}",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": filling_mode,
     }
     
     # Send LONG order
@@ -301,6 +321,10 @@ def close_position(ticket):
     
     position = position[0]
     
+    filling_mode = get_filling_mode()
+    if filling_mode is None:
+        return False
+    
     close_request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": SYMBOL,
@@ -311,7 +335,7 @@ def close_position(ticket):
         "magic": position.magic,
         "comment": "HEDGE_CANCEL",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": filling_mode,
     }
     
     result = mt5.order_send(close_request)
@@ -360,7 +384,7 @@ def main():
     logger.info("="*80)
     logger.info(f"XAUUSD HEDGE TRADER - {mode_str}")
     logger.info("="*80)
-    logger.info(f"Strategy: Take BOTH LONG and SHORT when RF >= 0.70")
+    logger.info(f"Strategy: Take BOTH LONG and SHORT when RF >= 0.80")
     logger.info(f"Symbol: {SYMBOL}")
     logger.info(f"Lot size: {LOT_SIZE}")
     logger.info(f"Target: ${TARGET_DOLLARS}, Stop: ${STOP_DOLLARS}")
@@ -404,8 +428,8 @@ def main():
                 logger.info(f"[{current_time.strftime('%Y-%m-%d %H:%M')}] Price: {current_bar['Close']:.2f} | RF: {rf_prob:.3f} | Pairs: {get_active_hedge_count()}/{MAX_HEDGE_PAIRS}")
                 
                 # Check if we can open new hedge pair
-                if rf_prob >= 0.70 and get_active_hedge_count() < MAX_HEDGE_PAIRS:
-                    logger.info(f"✓ HEDGE SIGNAL: RF={rf_prob:.3f} >= 0.70")
+                if rf_prob >= 0.80 and get_active_hedge_count() < MAX_HEDGE_PAIRS:
+                    logger.info(f"✓ HEDGE SIGNAL: RF={rf_prob:.3f} >= 0.80")
                     
                     if LIVE_MODE:
                         logger.info(f"Placing hedge orders with volume {LOT_SIZE}...")
