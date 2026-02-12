@@ -7,6 +7,14 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, roc_auc_score
 import sys, os
 
+# =============================================================================
+# CONFIGURABLE PARAMETERS - Modify these values as needed
+# =============================================================================
+TARGET = 5.0          # Target profit in dollars (e.g., 5.0 = $5)
+STOP = 2.5            # Stop loss in dollars (e.g., 2.5 = $2.5)
+HORIZON = 20          # Number of bars to look ahead for outcome
+RF_THRESHOLD = 0.70   # Random Forest probability threshold for hedge entry
+
 def create_microstructure_features(df):
     df = df.copy()
     
@@ -67,6 +75,58 @@ def create_microstructure_features(df):
     df['big_body'] = (df['abs_body'] > df['abs_body'].rolling(10).mean() * 1.5).astype(int)
     df['small_body'] = (df['abs_body'] < df['abs_body'].rolling(10).mean() * 0.5).astype(int)
     
+    # =====================================================================
+    # OPTIMIZED FEATURES (for Top 10 pruned feature set)
+    # =====================================================================
+    
+    # Extended flow windows
+    df['flow_15'] = df['directional_flow'].rolling(15).sum()
+    df['flow_20'] = df['directional_flow'].rolling(20).sum()
+    
+    # Flow acceleration
+    df['flow_accel'] = df['flow_3'] - df['flow_3'].shift(3)
+    df['flow_accel_5'] = df['flow_5'] - df['flow_5'].shift(5)
+    
+    # Absolute flow magnitude (direction-agnostic for hedge)
+    df['abs_flow_3'] = df['flow_3'].abs()
+    df['abs_flow_5'] = df['flow_5'].abs()
+    df['abs_flow_10'] = df['flow_10'].abs()
+    
+    # Flow divergence
+    df['flow_divergence'] = (df['flow_3'] * df['flow_10'] < 0).astype(int)
+    
+    # Flow quality
+    df['consecutive_up'] = df['is_up'].groupby((df['is_up'] != df['is_up'].shift()).cumsum()).cumcount() + 1
+    df['consecutive_up'] = df['consecutive_up'] * df['is_up']
+    df['consecutive_down'] = (1 - df['is_up']).groupby(((1-df['is_up']) != (1-df['is_up']).shift()).cumsum()).cumcount() + 1
+    df['consecutive_down'] = df['consecutive_down'] * (1 - df['is_up'])
+    df['max_consecutive'] = df[['consecutive_up', 'consecutive_down']].max(axis=1)
+    df['flow_efficiency'] = df['abs_body'] / (df['range'] + 1e-10)
+    df['flow_eff_3'] = df['flow_efficiency'].rolling(3).mean()
+    df['flow_eff_5'] = df['flow_efficiency'].rolling(5).mean()
+    
+    # Volatility regime
+    df['atr_roc'] = (df['atr_3'] - df['atr_3'].shift(3)) / (df['atr_3'].shift(3) + 1e-10)
+    df['vol_breakout'] = df['range'] / (df['atr_20'] + 1e-10)
+    df['range_min_5'] = df['range'].rolling(5).min()
+    df['range_max_5'] = df['range'].rolling(5).max()
+    df['range_squeeze'] = df['range_min_5'] / (df['range_max_5'] + 1e-10)
+    
+    # Distance features
+    df['abs_dist_ema8'] = df['dist_ema8'].abs()
+    df['dist_ema21'] = (df['Close'] - df['ema_21']) / df['Close']
+    df['abs_dist_ema21'] = df['dist_ema21'].abs()
+    df['ema_spread'] = (df['ema_8'] - df['ema_21']) / df['Close']
+    df['abs_ema_spread'] = df['ema_spread'].abs()
+    
+    # Combo features (created here so RF can use them)
+    df['combo_dist_flow'] = df['abs_dist_ema8'] * df['abs_flow_5']
+    df['combo_abs_flow_vol'] = df['abs_flow_5'] * df['vol_ratio']
+    df['combo_eff_flow'] = df['flow_eff_3'] * df['abs_flow_3']
+    df['combo_consecutive_body'] = df['max_consecutive'] * df['body_pct']
+    df['combo_atr_roc_accel'] = df['atr_roc'] * df['flow_accel'].abs()
+    df['combo_squeeze_flow'] = (1 - df['range_squeeze']) * df['abs_flow_3']
+    
     return df.dropna()
 
 def label_outcomes(df, horizon=15, target=5.0, stop=2.5):
@@ -122,8 +182,8 @@ print(f'Loaded {len(df)} bars (1-minute timeframe)')
 print('\nEngineering features...')
 df = create_microstructure_features(df)
 
-print('\nLabeling outcomes (20 bars=20mins, $5 target, $2.5 stop)...')
-df = label_outcomes(df, 20, 5.0, 2.5)
+print(f'\nLabeling outcomes ({HORIZON} bars, ${TARGET} target, ${STOP} stop)...')
+df = label_outcomes(df, HORIZON, TARGET, STOP)
 
 # Create combination features on full dataset
 print('\nCreating combination features...')
@@ -151,16 +211,18 @@ print('='*80)
 
 safe_trades = test['outcome'] != 0
 
+# Top 10 features by RF importance (pruned from 55 — less noise, better signal)
 feature_cols = [
-    'flow_3', 'flow_5', 'flow_10', 'flow_momentum',
-    'imbalance_3', 'imbalance_5',
-    'consistency_3', 'consistency_5',
-    'vol_ratio', 'vol_expansion', 'vol_contraction',
-    'trend_align', 'dist_ema8',
-    'at_high', 'at_low',
-    'upper_reject', 'lower_reject',
-    'big_body', 'small_body',
-    'body_pct', 'close_position'
+    'abs_ema_spread',    # 1. EMA 8-21 gap magnitude
+    'abs_flow_10',       # 2. 10-bar flow magnitude
+    'abs_flow_3',        # 3. 3-bar flow magnitude
+    'abs_flow_5',        # 4. 5-bar flow magnitude
+    'abs_dist_ema21',    # 5. Distance from EMA 21
+    'combo_dist_flow',   # 6. Distance × flow interaction
+    'abs_dist_ema8',     # 7. Distance from EMA 8
+    'flow_momentum',     # 8. Flow acceleration
+    'ema_spread',        # 9. EMA 8-21 spread (signed)
+    'flow_20',           # 10. 20-bar directional flow
 ]
 
 correlations = []
@@ -184,11 +246,8 @@ print('\n' + '='*80)
 print('ANALYZING COMBINATION FEATURE CORRELATIONS')
 print('='*80)
 
-combo_features = [
-    'combo_flow_trend', 'combo_vol_imbalance', 'combo_consistency_position',
-    'combo_body_reject', 'combo_trend_volatility', 'combo_imbalance_momentum',
-    'combo_position_consistency', 'combo_vol_flow'
-]
+# All combo features pruned except combo_dist_flow (already in feature_cols)
+combo_features = []
 
 print(f'\n{"Combination Feature":<35} {"Correlation":<12} {"Safe Mean":<12} {"Noise Mean":<12} {"Difference"}')
 print('-'*100)
@@ -486,8 +545,8 @@ rule1_trades = movement[rule1_cond].copy()
 rule1_trades['result'] = rule1_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
 rule1_trades['direction'] = 'LONG'
 rule1_trades['entry_price'] = rule1_trades['Close']
-rule1_trades['target_price'] = (rule1_trades['Close'] + 5.0).round(2)
-rule1_trades['stop_price'] = (rule1_trades['Close'] - 2.5).round(2)
+rule1_trades['target_price'] = (rule1_trades['Close'] + TARGET).round(2)
+rule1_trades['stop_price'] = (rule1_trades['Close'] - STOP).round(2)
 
 if len(rule1_trades) > 0:
     wins = (rule1_trades['result'] == 'WIN').sum()
@@ -550,8 +609,8 @@ rule2_trades = movement[rule2_cond].copy()
 rule2_trades['result'] = rule2_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
 rule2_trades['direction'] = 'LONG'
 rule2_trades['entry_price'] = rule2_trades['Close']
-rule2_trades['target_price'] = (rule2_trades['Close'] + 5.0).round(2)
-rule2_trades['stop_price'] = (rule2_trades['Close'] - 2.5).round(2)
+rule2_trades['target_price'] = (rule2_trades['Close'] + TARGET).round(2)
+rule2_trades['stop_price'] = (rule2_trades['Close'] - STOP).round(2)
 
 if len(rule2_trades) > 0:
     wins = (rule2_trades['result'] == 'WIN').sum()
@@ -614,8 +673,8 @@ rule3_trades = movement[rule3_cond].copy()
 rule3_trades['result'] = rule3_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
 rule3_trades['direction'] = 'LONG'
 rule3_trades['entry_price'] = rule3_trades['Close']
-rule3_trades['target_price'] = (rule3_trades['Close'] + 5.0).round(2)
-rule3_trades['stop_price'] = (rule3_trades['Close'] - 2.5).round(2)
+rule3_trades['target_price'] = (rule3_trades['Close'] + TARGET).round(2)
+rule3_trades['stop_price'] = (rule3_trades['Close'] - STOP).round(2)
 
 if len(rule3_trades) > 0:
     wins = (rule3_trades['result'] == 'WIN').sum()
@@ -692,8 +751,8 @@ rule4_trades = movement[rule4_cond].copy()
 rule4_trades['result'] = rule4_trades['outcome'].map({1: 'WIN', 2: 'LOSS'})
 rule4_trades['direction'] = 'LONG'
 rule4_trades['entry_price'] = rule4_trades['Close']
-rule4_trades['target_price'] = (rule4_trades['Close'] + 5.0).round(2)
-rule4_trades['stop_price'] = (rule4_trades['Close'] - 2.5).round(2)
+rule4_trades['target_price'] = (rule4_trades['Close'] + TARGET).round(2)
+rule4_trades['stop_price'] = (rule4_trades['Close'] - STOP).round(2)
 
 if len(rule4_trades) > 0:
     wins = (rule4_trades['result'] == 'WIN').sum()

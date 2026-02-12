@@ -159,3 +159,10 @@ data/processed/*
 catboost_info/
 models/*.pkl
 models/*.txt
+ml_test/output/*.pkl
+ml_test/output/*.cbm
+
+# Large data / backtest CSVs
+*.csv
+!ml_test/output/directional_trades.csv
+data/raw/

@@ -7,10 +7,13 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, roc_auc_score
 import sys, os
 
-# ============================================================================
-# CONFIGURATION - Edit these values to test different settings
-# ============================================================================
-RF_THRESHOLD = 0.80  # RF probability threshold for hedge signals (e.g., 0.70, 0.75, 0.80)
+# =============================================================================
+# CONFIGURABLE PARAMETERS - Modify these values as needed
+# =============================================================================
+TARGET = 3    # Target profit in dollars (e.g., 5.0 = $5)
+STOP = 1.5         # Stop loss in dollars (e.g., 2.5 = $2.5)
+HORIZON = 30      # Number of bars to look ahead for outcome
+RF_THRESHOLD = 0.75 # Random Forest probability threshold for hedge entry
 
 def create_microstructure_features(df):
     df = df.copy()
@@ -72,9 +75,79 @@ def create_microstructure_features(df):
     df['big_body'] = (df['abs_body'] > df['abs_body'].rolling(10).mean() * 1.5).astype(int)
     df['small_body'] = (df['abs_body'] < df['abs_body'].rolling(10).mean() * 0.5).astype(int)
     
+    # =====================================================================
+    # NEW OPTIMIZED FEATURES (based on RF feature importance analysis)
+    # Top RF features: flow_10, dist_ema8, flow_5, flow_momentum, flow_3
+    # Strategy: deeper flow signals, flow quality, vol regime, interactions
+    # =====================================================================
+    
+    # --- DEEPER FLOW FEATURES ---
+    # Flow over longer windows (RF loves flow)
+    df['flow_15'] = df['directional_flow'].rolling(15).sum()
+    df['flow_20'] = df['directional_flow'].rolling(20).sum()
+    
+    # Flow acceleration (rate of change of flow)
+    df['flow_accel'] = df['flow_3'] - df['flow_3'].shift(3)
+    df['flow_accel_5'] = df['flow_5'] - df['flow_5'].shift(5)
+    
+    # Absolute flow magnitude (direction doesn't matter for hedge)
+    df['abs_flow_3'] = df['flow_3'].abs()
+    df['abs_flow_5'] = df['flow_5'].abs()
+    df['abs_flow_10'] = df['flow_10'].abs()
+    
+    # Flow divergence: short-term vs long-term disagreement
+    df['flow_divergence'] = (df['flow_3'] * df['flow_10'] < 0).astype(int)
+    
+    # --- FLOW QUALITY ---
+    # Consecutive directional bars (how "clean" is the flow)
+    df['consecutive_up'] = df['is_up'].groupby((df['is_up'] != df['is_up'].shift()).cumsum()).cumcount() + 1
+    df['consecutive_up'] = df['consecutive_up'] * df['is_up']
+    df['consecutive_down'] = (1 - df['is_up']).groupby(((1-df['is_up']) != (1-df['is_up']).shift()).cumsum()).cumcount() + 1
+    df['consecutive_down'] = df['consecutive_down'] * (1 - df['is_up'])
+    df['max_consecutive'] = df[['consecutive_up', 'consecutive_down']].max(axis=1)
+    
+    # Flow efficiency: how much of the range is in one direction
+    df['flow_efficiency'] = df['abs_body'] / (df['range'] + 1e-10)
+    df['flow_eff_3'] = df['flow_efficiency'].rolling(3).mean()
+    df['flow_eff_5'] = df['flow_efficiency'].rolling(5).mean()
+    
+    # --- VOLATILITY REGIME ---
+    # ATR rate of change (expanding or contracting)
+    df['atr_roc'] = (df['atr_3'] - df['atr_3'].shift(3)) / (df['atr_3'].shift(3) + 1e-10)
+    
+    # Volatility breakout: current range vs recent average
+    df['vol_breakout'] = df['range'] / (df['atr_20'] + 1e-10)
+    
+    # Range compression then expansion pattern
+    df['range_min_5'] = df['range'].rolling(5).min()
+    df['range_max_5'] = df['range'].rolling(5).max()
+    df['range_squeeze'] = df['range_min_5'] / (df['range_max_5'] + 1e-10)
+    
+    # --- DISTANCE FEATURES (dist_ema8 is #2 in RF) ---
+    df['abs_dist_ema8'] = df['dist_ema8'].abs()
+    df['dist_ema21'] = (df['Close'] - df['ema_21']) / df['Close']
+    df['abs_dist_ema21'] = df['dist_ema21'].abs()
+    df['ema_spread'] = (df['ema_8'] - df['ema_21']) / df['Close']
+    df['abs_ema_spread'] = df['ema_spread'].abs()
+    
+    # --- NEW COMBO FEATURES ---
+    # Flow × volatility expansion (strong move + expanding vol = breakout)
+    df['combo_abs_flow_vol'] = df['abs_flow_5'] * df['vol_ratio']
+    # Flow efficiency × flow magnitude (clean strong moves)
+    df['combo_eff_flow'] = df['flow_eff_3'] * df['abs_flow_3']
+    # Consecutive bars × body size (sustained strong candles)
+    df['combo_consecutive_body'] = df['max_consecutive'] * df['body_pct']
+    # ATR expansion × flow acceleration (vol expanding while flow accelerating)
+    df['combo_atr_roc_accel'] = df['atr_roc'] * df['flow_accel'].abs()
+    # Squeeze release × flow (compression breaking with direction)
+    df['combo_squeeze_flow'] = (1 - df['range_squeeze']) * df['abs_flow_3']
+    # Distance from EMA × flow (overextended + strong flow = momentum)
+    df['combo_dist_flow'] = df['abs_dist_ema8'] * df['abs_flow_5']
+    
     return df.dropna()
 
-def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
+def label_outcomes(df, horizon=15, target=5.0, stop=2.5):
+    """Label outcomes using fixed dollar SL/TP (not percentage-based)"""
     df = df.copy()
     outcomes = []
     
@@ -85,23 +158,23 @@ def label_outcomes(df, horizon=15, target=0.001, stop=0.0005):
         entry = df['Close'].iloc[i]
         future = df.iloc[i+1:i+horizon+1]
         
-        # Check LONG
+        # Check LONG (fixed dollar targets)
         long_hit = False
         for h, l in zip(future['High'], future['Low']):
-            if h >= entry * (1 + target):
+            if h >= entry + target:  # TP hit
                 long_hit = True
                 break
-            if l <= entry * (1 - stop):
+            if l <= entry - stop:  # SL hit
                 break
         
-        # Check SHORT
+        # Check SHORT (fixed dollar targets)
         short_hit = False
         if not long_hit:
             for h, l in zip(future['High'], future['Low']):
-                if l <= entry * (1 - target):
+                if l <= entry - target:  # TP hit
                     short_hit = True
                     break
-                if h >= entry * (1 + stop):
+                if h >= entry + stop:  # SL hit
                     break
         
         outcomes.append(1 if long_hit else (2 if short_hit else 0))
@@ -126,8 +199,8 @@ print(f'Loaded {len(df)} bars (1-minute timeframe)')
 print('\nEngineering features...')
 df = create_microstructure_features(df)
 
-print('\nLabeling outcomes (20 bars=20mins, 0.1% target, 0.05% stop)...')
-df = label_outcomes(df, 20, 0.001, 0.0005)
+print(f'\nLabeling outcomes ({HORIZON} bars, ${TARGET} target, ${STOP} stop)...')
+df = label_outcomes(df, HORIZON, TARGET, STOP)
 
 # Create combination features on full dataset
 print('\nCreating combination features...')
@@ -155,16 +228,18 @@ print('='*80)
 
 safe_trades = test['outcome'] != 0
 
+# Top 10 features by RF importance (pruned from 55 — less noise, better signal)
 feature_cols = [
-    'flow_3', 'flow_5', 'flow_10', 'flow_momentum',
-    'imbalance_3', 'imbalance_5',
-    'consistency_3', 'consistency_5',
-    'vol_ratio', 'vol_expansion', 'vol_contraction',
-    'trend_align', 'dist_ema8',
-    'at_high', 'at_low',
-    'upper_reject', 'lower_reject',
-    'big_body', 'small_body',
-    'body_pct', 'close_position'
+    'abs_ema_spread',    # 1. EMA 8-21 gap magnitude
+    'abs_flow_10',       # 2. 10-bar flow magnitude
+    'abs_flow_3',        # 3. 3-bar flow magnitude
+    'abs_flow_5',        # 4. 5-bar flow magnitude
+    'abs_dist_ema21',    # 5. Distance from EMA 21
+    'combo_dist_flow',   # 6. Distance × flow interaction
+    'abs_dist_ema8',     # 7. Distance from EMA 8
+    'flow_momentum',     # 8. Flow acceleration
+    'ema_spread',        # 9. EMA 8-21 spread (signed)
+    'flow_20',           # 10. 20-bar directional flow
 ]
 
 correlations = []
@@ -188,11 +263,8 @@ print('\n' + '='*80)
 print('ANALYZING COMBINATION FEATURE CORRELATIONS')
 print('='*80)
 
-combo_features = [
-    'combo_flow_trend', 'combo_vol_imbalance', 'combo_consistency_position',
-    'combo_body_reject', 'combo_trend_volatility', 'combo_imbalance_momentum',
-    'combo_position_consistency', 'combo_vol_flow'
-]
+# All combo features pruned except combo_dist_flow (already in feature_cols)
+combo_features = []
 
 print(f'\n{"Combination Feature":<35} {"Correlation":<12} {"Safe Mean":<12} {"Noise Mean":<12} {"Difference"}')
 print('-'*100)
@@ -384,22 +456,22 @@ print('='*80)
 import pickle
 os.makedirs('models', exist_ok=True)
 
-with open('models/logistic_regression.pkl', 'wb') as f:
+with open('models/logistic_regression_old.pkl', 'wb') as f:
     pickle.dump(lr, f)
-print('Saved: models/logistic_regression.pkl')
+print('Saved: models/logistic_regression_old.pkl')
 
-with open('models/random_forest.pkl', 'wb') as f:
+with open('models/random_forest_old.pkl', 'wb') as f:
     pickle.dump(rf, f)
-print('Saved: models/random_forest.pkl')
+print('Saved: models/random_forest_old.pkl')
 
-with open('models/scaler.pkl', 'wb') as f:
+with open('models/scaler_old.pkl', 'wb') as f:
     pickle.dump(scaler, f)
-print('Saved: models/scaler.pkl')
+print('Saved: models/scaler_old.pkl')
 
 # Save feature names for reference
-with open('models/feature_names.txt', 'w') as f:
+with open('models/feature_names_old.txt', 'w') as f:
     f.write('\n'.join(all_features))
-print('Saved: models/feature_names.txt')
+print('Saved: models/feature_names_old.txt')
 
 # Print manual trading criteria
 print('\n' + '='*80)
@@ -456,7 +528,7 @@ def get_session(hour):
 
 test_hedge['session'] = test_hedge['hour'].apply(get_session)
 
-# Filter for high probability setups
+# Filter for high probability setups (RF >= RF_THRESHOLD)
 hedge_setups = test_hedge[test_hedge['rf_prob'] >= RF_THRESHOLD].copy()
 
 print(f'\nTotal test bars: {len(test_hedge)}')
@@ -468,13 +540,13 @@ hedge_results = []
 for idx, row in hedge_setups.iterrows():
     entry = row['Close']
     
-    # LONG trade parameters
-    long_target = entry * 1.001    # 0.1% target
-    long_stop = entry * 0.9995     # 0.05% stop
+    # LONG trade parameters (fixed dollar values)
+    long_target = entry + TARGET     # $TARGET target
+    long_stop = entry - STOP         # $STOP stop
     
-    # SHORT trade parameters
-    short_target = entry * 0.999   # 0.1% target
-    short_stop = entry * 1.0005    # 0.05% stop
+    # SHORT trade parameters (fixed dollar values)
+    short_target = entry - TARGET    # $TARGET target
+    short_stop = entry + STOP        # $STOP stop
     
     # Determine outcome based on actual market movement
     # outcome: 1 = LONG wins, 2 = SHORT wins, 0 = no clear direction
@@ -524,12 +596,10 @@ if len(hedge_df) > 0:
     print(f'Win Rate: {win_rate:.1f}%')
     
     # Net P&L calculation
-    # Each setup costs: 1 stop loss (losing side) = -1R
-    # Each win gains: 1 target (winning side) = +2R
-    # Net per winning setup: +2R - 1R = +1R
-    # Net per losing setup: -1R (both stopped or neither hit)
+    # WIN: +TARGET - STOP = +$5 - $2.5 = +$2.5 = +1R
+    # LOSS (both stopped): -STOP - STOP = -$2.5 - $2.5 = -$5.0 = -2R
     
-    total_pnl = wins * 1 + losses * (-1)
+    total_pnl = wins * 1 + losses * (-2)
     avg_pnl = total_pnl / len(hedge_df)
     
     print(f'\nNet P&L: {total_pnl}R')
@@ -552,7 +622,7 @@ if len(hedge_df) > 0:
         sess_wins = (sess_data['result'] == 'WIN').sum()
         sess_losses = len(sess_data) - sess_wins
         sess_wr = sess_wins / len(sess_data) * 100 if len(sess_data) > 0 else 0
-        sess_pnl = sess_wins * 1 + sess_losses * (-1)
+        sess_pnl = sess_wins * 1 + sess_losses * (-2)
         print(f'{sess:<12} Setups: {len(sess_data):<6} WR: {sess_wr:>5.1f}% P&L: {sess_pnl:>6}R')
     
     # Save results

@@ -1,6 +1,6 @@
 """
 XAUUSD Live Hedge Trader using MetaTrader 5
-Strategy: Take BOTH LONG and SHORT when RF >= 0.80
+Strategy: Take BOTH LONG and SHORT when RF >= 0.94
           Cancel whichever side hits stop loss first
           Let surviving side run to target
 
@@ -32,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # MT5 Configuration
-SYMBOL = 'XAUUSDb'  # Adjust suffix based on your broker
+SYMBOL = 'Volatility 75 (1s) Index'  # Adjust suffix based on your broker
 TIMEFRAME = mt5.TIMEFRAME_M1
 LOOKBACK_BARS = 100  # Need enough bars for rolling calculations (ema_21, atr_20, etc.)
 MAX_HEDGE_PAIRS = 2  # Maximum simultaneous hedge pairs
@@ -44,9 +44,9 @@ MAGIC_NUMBER_SHORT = 654321
 
 # Load trained model
 try:
-    with open('models/random_forest.pkl', 'rb') as f:
+    with open('models/random_forest_old.pkl', 'rb') as f:
         model = pickle.load(f)
-    with open('models/feature_names.txt', 'r') as f:
+    with open('models/feature_names_old.txt', 'r') as f:
         feature_names = f.read().strip().split('\n')
     logger.info(f"Model loaded successfully with {len(feature_names)} features")
 except Exception as e:
@@ -92,7 +92,8 @@ def wait_for_next_minute():
     return datetime.now(timezone.utc)
 
 def create_microstructure_features(df):
-    """Create all microstructure features for the model"""
+    """Create all microstructure features for the model
+    Must match hedging_strategy_strict_old.py exactly"""
     df = df.copy()
     
     # Price structure
@@ -111,13 +112,13 @@ def create_microstructure_features(df):
     df['flow_10'] = df['directional_flow'].rolling(10).sum()
     df['flow_momentum'] = df['flow_3'] - df['flow_5'].shift(2)
     
-    # Imbalance
+    # Imbalance (strong directional pressure)
     df['buy_imbalance'] = ((df['body'] > 0) & (df['body_pct'] > 0.6) & (df['close_position'] > 0.7)).astype(float)
     df['sell_imbalance'] = ((df['body'] < 0) & (df['body_pct'] > 0.6) & (df['close_position'] < 0.3)).astype(float)
     df['imbalance_3'] = (df['buy_imbalance'] - df['sell_imbalance']).rolling(3).sum()
     df['imbalance_5'] = (df['buy_imbalance'] - df['sell_imbalance']).rolling(5).sum()
     
-    # Momentum consistency
+    # Momentum consistency - is_up = bullish candle (close > open)
     df['is_up'] = (df['Close'] > df['Open']).astype(int)
     df['up_count_3'] = df['is_up'].rolling(3).sum()
     df['up_count_5'] = df['is_up'].rolling(5).sum()
@@ -132,7 +133,7 @@ def create_microstructure_features(df):
     df['vol_expansion'] = (df['range'] > df['atr_10'] * 1.2).astype(int)
     df['vol_contraction'] = (df['range'] < df['atr_10'] * 0.7).astype(int)
     
-    # Trend
+    # Trend structure
     df['ema_8'] = df['Close'].ewm(span=8).mean()
     df['ema_21'] = df['Close'].ewm(span=21).mean()
     df['trend_align'] = ((df['Close'] > df['ema_8']) & (df['ema_8'] > df['ema_21'])).astype(int) - ((df['Close'] < df['ema_8']) & (df['ema_8'] < df['ema_21'])).astype(int)
@@ -152,17 +153,49 @@ def create_microstructure_features(df):
     df['big_body'] = (df['abs_body'] > df['abs_body'].rolling(10).mean() * 1.5).astype(int)
     df['small_body'] = (df['abs_body'] < df['abs_body'].rolling(10).mean() * 0.5).astype(int)
     
-    # Combination features
-    df['combo_flow_trend'] = df['flow_momentum'] * df['trend_align']
-    df['combo_vol_imbalance'] = df['vol_ratio'] * df['imbalance_3']
-    df['combo_consistency_position'] = df['consistency_5'] * df['close_position']
-    df['combo_body_reject'] = df['big_body'] * (df['lower_reject'] - df['upper_reject'])
-    df['combo_trend_volatility'] = df['trend_align'] * df['vol_expansion']
-    df['combo_imbalance_momentum'] = df['imbalance_5'] * df['flow_5']
-    df['combo_position_consistency'] = df['close_position'] * df['consistency_3']
-    df['combo_vol_flow'] = df['vol_ratio'] * df['flow_3']
+    # --- DEEPER FLOW FEATURES ---
+    df['flow_15'] = df['directional_flow'].rolling(15).sum()
+    df['flow_20'] = df['directional_flow'].rolling(20).sum()
+    df['flow_accel'] = df['flow_3'] - df['flow_3'].shift(3)
+    df['flow_accel_5'] = df['flow_5'] - df['flow_5'].shift(5)
+    df['abs_flow_3'] = df['flow_3'].abs()
+    df['abs_flow_5'] = df['flow_5'].abs()
+    df['abs_flow_10'] = df['flow_10'].abs()
+    df['flow_divergence'] = (df['flow_3'] * df['flow_10'] < 0).astype(int)
     
-    return df
+    # --- FLOW QUALITY ---
+    df['consecutive_up'] = df['is_up'].groupby((df['is_up'] != df['is_up'].shift()).cumsum()).cumcount() + 1
+    df['consecutive_up'] = df['consecutive_up'] * df['is_up']
+    df['consecutive_down'] = (1 - df['is_up']).groupby(((1-df['is_up']) != (1-df['is_up']).shift()).cumsum()).cumcount() + 1
+    df['consecutive_down'] = df['consecutive_down'] * (1 - df['is_up'])
+    df['max_consecutive'] = df[['consecutive_up', 'consecutive_down']].max(axis=1)
+    df['flow_efficiency'] = df['abs_body'] / (df['range'] + 1e-10)
+    df['flow_eff_3'] = df['flow_efficiency'].rolling(3).mean()
+    df['flow_eff_5'] = df['flow_efficiency'].rolling(5).mean()
+    
+    # --- VOLATILITY REGIME ---
+    df['atr_roc'] = (df['atr_3'] - df['atr_3'].shift(3)) / (df['atr_3'].shift(3) + 1e-10)
+    df['vol_breakout'] = df['range'] / (df['atr_20'] + 1e-10)
+    df['range_min_5'] = df['range'].rolling(5).min()
+    df['range_max_5'] = df['range'].rolling(5).max()
+    df['range_squeeze'] = df['range_min_5'] / (df['range_max_5'] + 1e-10)
+    
+    # --- DISTANCE FEATURES ---
+    df['abs_dist_ema8'] = df['dist_ema8'].abs()
+    df['dist_ema21'] = (df['Close'] - df['ema_21']) / df['Close']
+    df['abs_dist_ema21'] = df['dist_ema21'].abs()
+    df['ema_spread'] = (df['ema_8'] - df['ema_21']) / df['Close']
+    df['abs_ema_spread'] = df['ema_spread'].abs()
+    
+    # --- COMBO FEATURES ---
+    df['combo_abs_flow_vol'] = df['abs_flow_5'] * df['vol_ratio']
+    df['combo_eff_flow'] = df['flow_eff_3'] * df['abs_flow_3']
+    df['combo_consecutive_body'] = df['max_consecutive'] * df['body_pct']
+    df['combo_atr_roc_accel'] = df['atr_roc'] * df['flow_accel'].abs()
+    df['combo_squeeze_flow'] = (1 - df['range_squeeze']) * df['abs_flow_3']
+    df['combo_dist_flow'] = df['abs_dist_ema8'] * df['abs_flow_5']
+    
+    return df.dropna()
 
 def get_market_data():
     """Fetch recent market data from MT5"""
@@ -384,7 +417,7 @@ def main():
     logger.info("="*80)
     logger.info(f"XAUUSD HEDGE TRADER - {mode_str}")
     logger.info("="*80)
-    logger.info(f"Strategy: Take BOTH LONG and SHORT when RF >= 0.80")
+    logger.info(f"Strategy: Take BOTH LONG and SHORT when RF >= 0.94")
     logger.info(f"Symbol: {SYMBOL}")
     logger.info(f"Lot size: {LOT_SIZE}")
     logger.info(f"Target: ${TARGET_DOLLARS}, Stop: ${STOP_DOLLARS}")
@@ -428,8 +461,8 @@ def main():
                 logger.info(f"[{current_time.strftime('%Y-%m-%d %H:%M')}] Price: {current_bar['Close']:.2f} | RF: {rf_prob:.3f} | Pairs: {get_active_hedge_count()}/{MAX_HEDGE_PAIRS}")
                 
                 # Check if we can open new hedge pair
-                if rf_prob >= 0.80 and get_active_hedge_count() < MAX_HEDGE_PAIRS:
-                    logger.info(f"✓ HEDGE SIGNAL: RF={rf_prob:.3f} >= 0.80")
+                if rf_prob >= 0.94 and get_active_hedge_count() < MAX_HEDGE_PAIRS:
+                    logger.info(f"✓ HEDGE SIGNAL: RF={rf_prob:.3f} >= 0.70")
                     
                     if LIVE_MODE:
                         logger.info(f"Placing hedge orders with volume {LOT_SIZE}...")
