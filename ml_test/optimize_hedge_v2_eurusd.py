@@ -546,7 +546,7 @@ def make_objective(df_feat, split_idx):
     def objective(trial):
         mode    = trial.suggest_categorical('mode', ['hedge', 'directional'])
         target  = trial.suggest_float('target', 2.0, 15.0, step=0.5)
-        stop    = trial.suggest_float('stop', 1.0, 5.0, step=0.25)
+        stop    = trial.suggest_float('stop', 0.5, 5.0, step=0.25)
         horizon = trial.suggest_int('horizon', 15, 90, step=5)
         rf_th   = trial.suggest_float('rf_threshold', 0.40, 0.90, step=0.05)
         rf_dep  = trial.suggest_int('rf_depth', 3, 20, step=1)
@@ -564,9 +564,9 @@ def make_objective(df_feat, split_idx):
                 return -999.0
         else:
             # Directional: win = target - spread, loss = stop + spread
-            # For 1:3 RR minimum
+            # For 1:2 RR minimum
             rr = (target - SPREAD) / (stop + SPREAD)
-            if rr < 3.0:  # At least 3:1 for directional
+            if rr < 1.5:  # At least 1.5:1 for directional
                 return -999.0
 
         result = run_pipeline(df_feat, split_idx, target, stop, horizon,
@@ -805,7 +805,7 @@ if __name__ == '__main__':
     # Save to CSV
     out_dir = os.path.join(os.path.dirname(__file__), 'output')
     os.makedirs(out_dir, exist_ok=True)
-    csv_path = os.path.join(out_dir, 'optuna_profitable_trials_3rr.csv')
+    csv_path = os.path.join(out_dir, 'optuna_profitable_trials.csv')
     results_df.to_csv(csv_path, index=False)
     print(f'\n  Saved {len(results_df)} profitable trials → {csv_path}')
 
