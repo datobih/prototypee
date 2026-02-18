@@ -336,12 +336,13 @@ def run_pipeline(df_feat, split_idx, target, stop, horizon, rf_threshold):
 def make_objective(df_feat, split_idx):
     def objective(trial):
         target  = trial.suggest_float('target', 1.0, 6.0, step=0.5)
-        stop    = trial.suggest_float('stop', 0.5, 4.0, step=0.25)
+        stop    = trial.suggest_float('stop', 1.0, 4.0, step=0.25)
         horizon = trial.suggest_int('horizon', 15, 60, step=5)
         rf_th   = trial.suggest_float('rf_threshold', 0.60, 0.95, step=0.05)
 
-        # Sanity: target must exceed stop for positive R on win
-        if target <= stop:
+        # Enforce hedge RR >= 1:  WIN = target-stop, LOSS = -2*stop
+        # RR = (target-stop)/(2*stop) >= 1  →  target >= 3*stop
+        if target < 3 * stop:
             return -999.0
 
         result = run_pipeline(df_feat, split_idx, target, stop, horizon, rf_th)

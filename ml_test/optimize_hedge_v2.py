@@ -31,7 +31,7 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 warnings.filterwarnings('ignore')
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw', 'XAUUSD1.csv')
-N_TRIALS  = 200
+N_TRIALS  = 500
 SPREAD    = 0.30
 
 
@@ -136,6 +136,85 @@ def create_microstructure_features(df):
     df['combo_vol_flow'] = df['vol_ratio'] * df['flow_3']
 
     return df.dropna()
+
+
+# ── RSI helper ─────────────────────────────────────────────────────────────
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
+    rs = avg_gain / (avg_loss + 1e-10)
+    return 100 - (100 / (1 + rs))
+
+
+# ── Higher Timeframe Features ──────────────────────────────────────────────
+def create_htf_features(df):
+    """
+    Resample 1min bars to 15min, 1H, 4H, Daily.
+    Compute trend/momentum/structure on each HTF.
+    Merge back to 1min index with shift(1) to avoid look-ahead.
+    """
+    htf_dfs = {}
+
+    timeframes = {
+        '15min': '15min',
+        '1h':    '1h',
+        '4h':    '4h',
+        '1d':    '1D',
+    }
+
+    for tf_name, resample_rule in timeframes.items():
+        vol_col = 'Volume' if 'Volume' in df.columns else 'TickVol'
+        agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
+        if vol_col in df.columns:
+            agg_dict[vol_col] = 'sum'
+        htf = df.resample(resample_rule).agg(agg_dict).dropna()
+
+        htf[f'{tf_name}_ema8']  = htf['Close'].ewm(span=8).mean()
+        htf[f'{tf_name}_ema21'] = htf['Close'].ewm(span=21).mean()
+        htf[f'{tf_name}_ema50'] = htf['Close'].ewm(span=50).mean()
+
+        htf[f'{tf_name}_trend'] = (
+            ((htf['Close'] > htf[f'{tf_name}_ema8']) &
+             (htf[f'{tf_name}_ema8'] > htf[f'{tf_name}_ema21'])).astype(int) -
+            ((htf['Close'] < htf[f'{tf_name}_ema8']) &
+             (htf[f'{tf_name}_ema8'] < htf[f'{tf_name}_ema21'])).astype(int)
+        )
+
+        htf[f'{tf_name}_trend50'] = (
+            (htf['Close'] > htf[f'{tf_name}_ema50']).astype(int) -
+            (htf['Close'] < htf[f'{tf_name}_ema50']).astype(int)
+        )
+
+        htf[f'{tf_name}_dist_ema21'] = (htf['Close'] - htf[f'{tf_name}_ema21']) / htf['Close']
+        htf[f'{tf_name}_rsi'] = compute_rsi(htf['Close'], 14)
+
+        htf_body = htf['Close'] - htf['Open']
+        htf_flow = htf_body / htf['Close']
+        htf[f'{tf_name}_flow_3'] = htf_flow.rolling(3).sum()
+        htf[f'{tf_name}_flow_5'] = htf_flow.rolling(5).sum()
+
+        htf_range = htf['High'] - htf['Low']
+        htf[f'{tf_name}_close_pos'] = (htf['Close'] - htf['Low']) / (htf_range + 1e-10)
+
+        htf_atr3  = htf_range.rolling(3).mean()
+        htf_atr10 = htf_range.rolling(10).mean()
+        htf[f'{tf_name}_vol_ratio'] = htf_atr3 / (htf_atr10 + 1e-10)
+        htf[f'{tf_name}_vol_exp'] = (htf_range > htf_atr10 * 1.2).astype(int)
+        htf[f'{tf_name}_range_pct'] = htf_range / htf['Close']
+
+        feat_cols = [c for c in htf.columns if c.startswith(f'{tf_name}_')]
+        htf_feat = htf[feat_cols].shift(1)
+        htf_dfs[tf_name] = htf_feat
+
+    result = df.copy()
+    for tf_name, htf_feat in htf_dfs.items():
+        htf_reindexed = htf_feat.reindex(result.index, method='ffill')
+        result = pd.concat([result, htf_reindexed], axis=1)
+
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -449,17 +528,27 @@ def evaluate_directional(rf_probs_long, rf_probs_short, dir_labels,
 #  PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
 
-FEATURE_NAMES = [
+BASE_FEATURES = [
     'abs_ema_spread', 'abs_flow_10', 'abs_flow_3', 'abs_flow_5',
     'abs_dist_ema21', 'combo_dist_flow', 'abs_dist_ema8',
     'flow_momentum', 'ema_spread', 'flow_20',
-    # Additional features for directional prediction
     'flow_3', 'flow_5', 'flow_10', 'trend_align', 'imbalance_3',
     'imbalance_5', 'close_position', 'vol_ratio', 'vol_expansion',
     'consistency_3', 'consistency_5', 'dist_ema8',
     'combo_flow_trend', 'combo_vol_imbalance',
     'combo_imbalance_momentum', 'combo_vol_flow',
 ]
+
+HTF_FEATURES = []
+for _tf in ['15min', '1h', '4h', '1d']:
+    HTF_FEATURES.extend([
+        f'{_tf}_trend', f'{_tf}_trend50', f'{_tf}_dist_ema21',
+        f'{_tf}_rsi', f'{_tf}_flow_3', f'{_tf}_flow_5',
+        f'{_tf}_close_pos', f'{_tf}_vol_ratio', f'{_tf}_vol_exp',
+        f'{_tf}_range_pct',
+    ])
+
+FEATURE_NAMES = BASE_FEATURES + HTF_FEATURES
 
 
 def run_pipeline(df_feat, split_idx, target, stop, horizon,
@@ -546,7 +635,7 @@ def make_objective(df_feat, split_idx):
     def objective(trial):
         mode    = trial.suggest_categorical('mode', ['hedge', 'directional'])
         target  = trial.suggest_float('target', 2.0, 15.0, step=0.5)
-        stop    = trial.suggest_float('stop', 1.0, 5.0, step=0.25)
+        stop    = trial.suggest_float('stop', 0.50, 5.0, step=0.25)
         horizon = trial.suggest_int('horizon', 15, 90, step=5)
         rf_th   = trial.suggest_float('rf_threshold', 0.40, 0.90, step=0.05)
         rf_dep  = trial.suggest_int('rf_depth', 3, 20, step=1)
@@ -563,10 +652,8 @@ def make_objective(df_feat, split_idx):
             if win_pnl / loss_pnl < 0.3:  # Very loose for hedge
                 return -999.0
         else:
-            # Directional: win = target - spread, loss = stop + spread
-            # For 1:3 RR minimum
-            rr = (target - SPREAD) / (stop + SPREAD)
-            if rr < 3.0:  # At least 3:1 for directional
+            # Directional: win = target - spread, must be positive
+            if target <= SPREAD:
                 return -999.0
 
         result = run_pipeline(df_feat, split_idx, target, stop, horizon,
@@ -620,8 +707,8 @@ def print_metrics(m, label=''):
 if __name__ == '__main__':
     t0 = time.time()
     print('=' * 72)
-    print('  HEDGING STRATEGY v2 — CRITICAL REDESIGN')
-    print('  Numba JIT + Optuna | Spread-adjusted P&L | Directional + Hedge')
+    print('  HEDGING STRATEGY v2 -- HTF ENHANCED')
+    print('  Numba JIT + Optuna | Spread-adjusted P&L | 66 features (26 base + 40 HTF)')
     print('=' * 72)
 
     # ── Load ──
@@ -634,12 +721,19 @@ if __name__ == '__main__':
     df['Datetime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'],
                                     format='%Y.%m.%d %H:%M:%S')
     df.set_index('Datetime', inplace=True)
-    df = df[['Open', 'High', 'Low', 'Close']].copy()
+    df = df[['Open', 'High', 'Low', 'Close', 'TickVol']].copy()
     print(f'  {len(df):,} bars')
 
-    print('  Engineering features...')
+    print('  Engineering 1min features...')
     df = create_microstructure_features(df)
     print(f'  {len(df):,} bars after warmup')
+
+    print('  Resampling HTF bars (15min/1H/4H/Daily) and computing features...')
+    df = create_htf_features(df)
+    htf_nans = df[HTF_FEATURES].isna().any(axis=1).sum()
+    df = df.dropna(subset=HTF_FEATURES)
+    print(f'  {len(df):,} bars after HTF warmup ({htf_nans:,} rows dropped)')
+    print(f'  Total features: {len(FEATURE_NAMES)} ({len(BASE_FEATURES)} base + {len(HTF_FEATURES)} HTF)')
 
     split = int(len(df) * 0.6)
     print(f'  Train: {split:,} | Test: {len(df)-split:,}')
@@ -701,13 +795,7 @@ if __name__ == '__main__':
 
     t1 = time.time()
     study.optimize(
-        objective, n_trials=N_TRIALS, show_progress_bar=False,
-        callbacks=[lambda study, trial:
-            print(f'    Trial {trial.number+1:>3d}/{N_TRIALS}  '
-                  f't={trial.value:>7.2f}  best={study.best_value:>7.2f}  '
-                  f'mode={trial.params.get("mode","?")}',
-                  end='\r')
-        ]
+        objective, n_trials=N_TRIALS, n_jobs=-1, show_progress_bar=True,
     )
     elapsed = time.time() - t1
 
@@ -805,7 +893,7 @@ if __name__ == '__main__':
     # Save to CSV
     out_dir = os.path.join(os.path.dirname(__file__), 'output')
     os.makedirs(out_dir, exist_ok=True)
-    csv_path = os.path.join(out_dir, 'optuna_profitable_trials_3rr.csv')
+    csv_path = os.path.join(out_dir, 'optuna_profitable_trials_htf.csv')
     results_df.to_csv(csv_path, index=False)
     print(f'\n  Saved {len(results_df)} profitable trials → {csv_path}')
 

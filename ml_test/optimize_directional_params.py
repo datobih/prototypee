@@ -1,22 +1,11 @@
 """
-Hedge Trade Optimizer — Base Features + Optuna
+Focused Directional Optimizer — Base Features + Optuna
 ========================================================
-Mode:    HEDGE ONLY (simultaneous LONG + SHORT)
-Fixed:   rf_depth=20, rf_trees=50 (fast)
+Fixed:   mode=directional, rf_depth=20, rf_trees=50 (fast)
 Optimize: target, stop, horizon, rf_threshold  (4 params)
 Features: 26 base (no HTF)
-Walk-forward: train 60% (90% subsample), test 40%
-Objective: t-statistic (spread-adjusted, 2x spread per hedge)
-
-Hedge Mechanics:
-  - Open LONG + SHORT simultaneously at each signal bar
-  - Long:  TP = entry + target,  SL = entry - stop
-  - Short: TP = entry - target,  SL = entry + stop
-  - Both positions tracked independently until closed or horizon expires
-  - Net P&L = long_pnl + short_pnl - 2*SPREAD
-  - Best case: price oscillates enough to hit BOTH TPs → net = 2*target - 2*spread (XAUUSD)
-  - Typical: one TP hit, other side stopped/expired → net = target - loss - 2*spread
-  - Worst: both sides stopped → net = -2*stop - 2*spread
+Walk-forward: train 60% (50% subsample), test 40%
+Objective: t-statistic (spread-adjusted)
 """
 
 import numpy as np
@@ -32,14 +21,14 @@ from sklearn.ensemble import RandomForestClassifier
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 warnings.filterwarnings('ignore')
 
-DATA_PATH  = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw', 'XAUUSD1.csv')
+DATA_PATH  = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw', 'XAUUSDD.csv')
 N_TRIALS   = 200
-SPREAD     = 0.24      # per-leg spread (hedge pays 2x = $0.60 total)
+SPREAD     = 0.30
 RF_DEPTH   = 20
-RF_TREES   = 50        # fast search (retrain best with 200 after)
+RF_TREES   = 50   # fast search (retrain best with 200 after)
 
 
-# ── Feature engineering ──────────────────────────────────────────────────────
+# ── Feature engineering (exact copy from hedging_strategy_strict_old.py) ─────
 def create_microstructure_features(df):
     df = df.copy()
 
@@ -155,123 +144,129 @@ def create_microstructure_features(df):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  NUMBA LABELING — Binary movement detection
-#  "Did price move $target in EITHER direction within horizon bars?"
-#  This is the key insight from hedging_strategy_strict_old.py:
-#  predict MOVEMENT, not direction.
+#  NUMBA LABELING — Directional only
 # ══════════════════════════════════════════════════════════════════════════════
 
 @nb.njit(cache=True)
-def label_movement(closes, highs, lows, horizon, target, stop):
+def label_directional(closes, highs, lows, horizon, target, stop):
     """
-    Binary movement labeling (like hedging_strategy_strict_old.py).
-
-    For each bar, check if price hits +target (LONG TP) or -target (SHORT TP)
-    before hitting the stop loss on that side.
-
-    Returns:
-        labels – 1 if price moved $target in either direction (LONG or SHORT TP hit)
-                 0 if neither TP was hit (both stopped out or timed out)
-        sides  – 1 if LONG TP hit, 2 if SHORT TP hit, 0 if neither
+    Directional labeling: for each bar, does price hit TP or SL first?
+    Returns: 1=LONG TP, 2=SHORT TP, 0=neither
     """
     n = len(closes)
     labels = np.zeros(n, dtype=np.int32)
-    sides  = np.zeros(n, dtype=np.int32)
 
     for i in range(n - horizon):
         entry = closes[i]
+        long_tp  = entry + target
+        long_sl  = entry - stop
+        short_tp = entry - target
+        short_sl = entry + stop
 
-        # Check LONG: does price hit entry+target before entry-stop?
-        long_hit = False
         for j in range(i + 1, min(i + horizon + 1, n)):
-            if highs[j] >= entry + target:
-                long_hit = True
+            if highs[j] >= long_tp:
+                labels[i] = 1
                 break
-            if lows[j] <= entry - stop:
+            if lows[j] <= short_tp:
+                labels[i] = 2
+                break
+            if lows[j] <= long_sl:
+                for k in range(j, min(i + horizon + 1, n)):
+                    if lows[k] <= short_tp:
+                        labels[i] = 2
+                        break
+                    if highs[k] >= short_sl:
+                        break
+                break
+            if highs[j] >= short_sl:
+                for k in range(j, min(i + horizon + 1, n)):
+                    if highs[k] >= long_tp:
+                        labels[i] = 1
+                        break
+                    if lows[k] <= long_sl:
+                        break
                 break
 
-        # Check SHORT: does price hit entry-target before entry+stop?
-        short_hit = False
-        if not long_hit:
-            for j in range(i + 1, min(i + horizon + 1, n)):
-                if lows[j] <= entry - target:
-                    short_hit = True
-                    break
-                if highs[j] >= entry + stop:
-                    break
+    return labels
 
-        if long_hit:
-            labels[i] = 1
-            sides[i] = 1
-        elif short_hit:
-            labels[i] = 1
-            sides[i] = 2
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  EVALUATION — Directional only
+# ══════════════════════════════════════════════════════════════════════════════
+
+def evaluate_directional(rf_probs_long, rf_probs_short, dir_labels,
+                         target, stop, threshold):
+    """Directional: LONG when prob_long >= th, SHORT when prob_short >= th."""
+    long_mask = rf_probs_long >= threshold
+    short_mask = rf_probs_short >= threshold
+
+    trades_pnl = []
+    trade_types = []
+
+    for i in np.where(long_mask)[0]:
+        if dir_labels[i] == 1:
+            trades_pnl.append(target - SPREAD)
+            trade_types.append(1)
+        elif dir_labels[i] == 2:
+            trades_pnl.append(-stop - SPREAD)
+            trade_types.append(-1)
         else:
-            labels[i] = 0
-            sides[i] = 0
+            trades_pnl.append(-SPREAD)
+            trade_types.append(0)
 
-    return labels, sides
+    for i in np.where(short_mask)[0]:
+        if dir_labels[i] == 2:
+            trades_pnl.append(target - SPREAD)
+            trade_types.append(1)
+        elif dir_labels[i] == 1:
+            trades_pnl.append(-stop - SPREAD)
+            trade_types.append(-1)
+        else:
+            trades_pnl.append(-SPREAD)
+            trade_types.append(0)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  EVALUATION — Hedge trades (R-based P&L like hedging_strategy_strict_old)
-#  WIN:  one side hits TP → net = +target - stop  (winner - loser)
-#  LOSS: neither side hits TP → net = -2 * stop   (both stopped)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def evaluate_hedge(rf_probs_movement, movement_labels, target, stop, threshold):
-    """
-    Evaluate hedge entries: enter when model predicts price will move.
-    WIN  = target - stop  (surviving side profits, cancelled side stopped)
-    LOSS = -2 * stop      (both sides stopped out)
-    """
-    mask = rf_probs_movement >= threshold
-
-    if mask.sum() < 10:
+    if len(trades_pnl) < 10:
         return None
 
-    selected_labels = movement_labels[mask]
-    n = len(selected_labels)
+    pnl = np.array(trades_pnl)
+    types = np.array(trade_types)
+    n = len(pnl)
 
-    wins   = int((selected_labels == 1).sum())
-    losses = n - wins
+    wins = int((types == 1).sum())
+    losses = int((types == -1).sum())
+    timeouts = int((types == 0).sum())
 
-    # P&L per trade (in dollars)
-    win_pnl  = target - stop     # one side wins target, other loses stop
-    loss_pnl = -2 * stop         # both sides stopped out
-
-    pnl_arr = np.where(selected_labels == 1, win_pnl, loss_pnl)
-    pnl_arr = pnl_arr.astype(np.float64)
-
-    total = float(pnl_arr.sum())
-    avg   = float(pnl_arr.mean())
-    std   = float(pnl_arr.std()) if n > 1 else 1e-10
+    total = float(pnl.sum())
+    avg = float(pnl.mean())
+    std = float(pnl.std()) if n > 1 else 1e-10
     t_stat = avg / (std / np.sqrt(n) + 1e-10)
     sharpe = avg / (std + 1e-10) * np.sqrt(252)
 
-    cum    = np.cumsum(pnl_arr)
+    cum = np.cumsum(pnl)
     max_dd = float(np.min(cum - np.maximum.accumulate(cum)))
 
-    gross_w = float(pnl_arr[pnl_arr > 0].sum()) if (pnl_arr > 0).any() else 0.0
-    gross_l = float(np.abs(pnl_arr[pnl_arr < 0].sum())) if (pnl_arr < 0).any() else 1e-10
+    gross_w = float(pnl[pnl > 0].sum()) if (pnl > 0).any() else 0.0
+    gross_l = float(np.abs(pnl[pnl < 0].sum())) if (pnl < 0).any() else 1e-10
     pf = gross_w / gross_l
 
-    rr = abs(win_pnl / loss_pnl) if loss_pnl != 0 else 0.0
+    avg_win = float(pnl[pnl > 0].mean()) if (pnl > 0).any() else 0.0
+    avg_loss = float(pnl[pnl < 0].mean()) if (pnl < 0).any() else -1.0
+    rr = abs(avg_win / avg_loss) if avg_loss != 0 else 0.0
 
     return {
-        'setups': n, 'wins': wins, 'losses': losses,
+        'setups': n, 'wins': wins, 'losses': losses, 'timeouts': timeouts,
         'wr': round(wins / n * 100, 1),
         'total_pnl': round(total, 2), 'avg_pnl': round(avg, 4),
-        'win_pnl': round(win_pnl, 2), 'loss_pnl': round(loss_pnl, 2),
+        'avg_win': round(avg_win, 2), 'avg_loss': round(avg_loss, 2),
         'rr': round(rr, 2),
         't_stat': round(t_stat, 2), 'sharpe': round(sharpe, 2),
         'pf': round(pf, 2), 'max_dd': round(max_dd, 2),
-        'total_pnl_R': round(total / abs(loss_pnl), 1) if loss_pnl != 0 else 0,
+        'n_long': int(long_mask.sum()), 'n_short': int(short_mask.sum()),
     }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PIPELINE — Hedge only, fixed RF depth/trees
+#  PIPELINE — Directional only, fixed RF depth/trees
 # ══════════════════════════════════════════════════════════════════════════════
 
 BASE_FEATURES = [
@@ -289,12 +284,12 @@ FEATURE_NAMES = BASE_FEATURES
 
 
 def run_pipeline(df_feat, split_idx, target, stop, horizon, rf_threshold):
-    """Label movement -> train RF -> predict -> evaluate."""
+    """Label -> train RF -> predict -> evaluate. Fixed depth/trees."""
     closes = df_feat['Close'].values.astype(np.float64)
     highs  = df_feat['High'].values.astype(np.float64)
     lows   = df_feat['Low'].values.astype(np.float64)
 
-    labels, sides = label_movement(closes, highs, lows, horizon, target, stop)
+    labels = label_directional(closes, highs, lows, horizon, target, stop)
 
     df_lab = df_feat.copy()
     df_lab['label'] = labels
@@ -302,7 +297,7 @@ def run_pipeline(df_feat, split_idx, target, stop, horizon, rf_threshold):
     train = df_lab.iloc[:split_idx]
     test  = df_lab.iloc[split_idx:]
 
-    # Subsample train for speed (90%)
+    # Subsample train for speed (50%)
     train = train.sample(frac=0.9, random_state=42)
 
     y_train = train['label'].values
@@ -315,18 +310,20 @@ def run_pipeline(df_feat, split_idx, target, stop, horizon, rf_threshold):
     )
     rf.fit(X_train, y_train)
 
-    proba   = rf.predict_proba(X_test)
+    proba = rf.predict_proba(X_test)
     classes = rf.classes_
 
-    # Find probability of class 1 (price will move)
-    move_idx = np.where(classes == 1)[0]
-    if len(move_idx) == 0:
+    long_idx  = np.where(classes == 1)[0]
+    short_idx = np.where(classes == 2)[0]
+    if len(long_idx) == 0 or len(short_idx) == 0:
         return None
 
-    probs_movement = proba[:, move_idx[0]]
+    probs_long  = proba[:, long_idx[0]]
+    probs_short = proba[:, short_idx[0]]
 
-    return evaluate_hedge(probs_movement, test['label'].values,
-                          target, stop, rf_threshold)
+    return evaluate_directional(probs_long, probs_short,
+                                test['label'].values,
+                                target, stop, rf_threshold)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -335,13 +332,13 @@ def run_pipeline(df_feat, split_idx, target, stop, horizon, rf_threshold):
 
 def make_objective(df_feat, split_idx):
     def objective(trial):
-        target  = trial.suggest_float('target', 1.0, 6.0, step=0.5)
-        stop    = trial.suggest_float('stop', 0.5, 4.0, step=0.25)
+        target  = trial.suggest_float('target', 2.0, 8.0, step=0.5)
+        stop    = trial.suggest_float('stop', 0.50, 3.0, step=0.25)
         horizon = trial.suggest_int('horizon', 15, 60, step=5)
-        rf_th   = trial.suggest_float('rf_threshold', 0.60, 0.95, step=0.05)
+        rf_th   = trial.suggest_float('rf_threshold', 0.40, 0.90, step=0.05)
 
-        # Sanity: target must exceed stop for positive R on win
-        if target <= stop:
+        # Sanity: win must be positive after spread
+        if target <= SPREAD:
             return -999.0
 
         result = run_pipeline(df_feat, split_idx, target, stop, horizon, rf_th)
@@ -370,17 +367,18 @@ def print_metrics(m, label=''):
     if m is None:
         print(f'  {label}: No valid trades')
         return
-    print(f'  {label} [HEDGE - MOVEMENT]')
-    print(f'    Setups:    {m["setups"]:>5d}   (W:{m["wins"]} L:{m["losses"]})')
+    print(f'  {label} [DIRECTIONAL]')
+    print(f'    Setups:    {m["setups"]:>5d}   (W:{m["wins"]} L:{m["losses"]} T:{m["timeouts"]})')
     print(f'    Win Rate:  {m["wr"]:>5.1f}%')
-    print(f'    Per trade: WIN=${m["win_pnl"]:>+.2f}  |  LOSS=${m["loss_pnl"]:>+.2f}  '
-          f'|  RR: {m["rr"]:.2f}')
-    print(f'    Total P&L: ${m["total_pnl"]:>9,.2f}  ({m["total_pnl_R"]:>+.1f}R)')
-    print(f'    Avg P&L:   ${m["avg_pnl"]:>9.4f} per hedge')
+    print(f'    Avg Win:   ${m["avg_win"]:>+7.2f}  |  Avg Loss: ${m["avg_loss"]:>+7.2f}  '
+          f'|  RR: {m["rr"]:.2f}  (incl 1x${SPREAD} spread)')
+    print(f'    Total P&L: ${m["total_pnl"]:>9,.2f}')
+    print(f'    Avg P&L:   ${m["avg_pnl"]:>9.4f} per trade')
     print(f'    t-stat:    {m["t_stat"]:>6.2f}')
     print(f'    PF:        {m["pf"]:>6.2f}')
     print(f'    Sharpe:    {m["sharpe"]:>6.2f}')
     print(f'    MaxDD:     ${m["max_dd"]:>9,.2f}')
+    print(f'    Entries:   {m["n_long"]} long, {m["n_short"]} short')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -389,11 +387,10 @@ def print_metrics(m, label=''):
 if __name__ == '__main__':
     t0 = time.time()
     print('=' * 72)
-    print('  HEDGE TRADE OPTIMIZER -- XAUUSD (MOVEMENT DETECTION)')
+    print('  FOCUSED DIRECTIONAL OPTIMIZER -- BASE FEATURES')
     print(f'  Fixed: depth={RF_DEPTH}, trees={RF_TREES} | '
           f'Optimize: target, stop, horizon, threshold')
     print(f'  {N_TRIALS} trials | {len(FEATURE_NAMES)} base features')
-    print(f'  RF predicts: "will price MOVE?" (not direction)')
     print('=' * 72)
 
     # ── Load ──
@@ -422,26 +419,26 @@ if __name__ == '__main__':
     c = df['Close'].values[:2000].astype(np.float64)
     h = df['High'].values[:2000].astype(np.float64)
     l = df['Low'].values[:2000].astype(np.float64)
-    _ = label_movement(c, h, l, 30, 3.0, 1.5)
+    _ = label_directional(c, h, l, 30, 3.0, 1.5)
     print('  Done.')
 
     # ══════════════════════════════════════════════════════════════════════
-    #  BASELINE (same params as hedging_strategy_strict_old.py)
+    #  BASELINE (original params: TGT=$2, SL=$0.50, HOR=15, TH=0.40)
     # ══════════════════════════════════════════════════════════════════════
     print(f'\n{"="*72}')
-    print('  BASELINE (TGT=$3, SL=$1.5, HOR=30, TH=0.75)')
+    print('  BASELINE (TGT=$2, SL=$0.50, HOR=15, TH=0.40)')
     print(f'{"="*72}')
 
-    base = run_pipeline(df, split, 3.0, 1.5, 30, 0.75)
-    print_metrics(base, 'Baseline hedge')
+    base = run_pipeline(df, split, 2.0, 0.50, 15, 0.40)
+    print_metrics(base, 'Original params')
 
     # ══════════════════════════════════════════════════════════════════════
-    #  OPTUNA OPTIMIZATION (4 params)
+    #  OPTUNA OPTIMIZATION (4 params, parallel)
     # ══════════════════════════════════════════════════════════════════════
     print(f'\n{"="*72}')
-    print(f'  OPTUNA OPTIMIZATION ({N_TRIALS} trials, MOVEMENT DETECTION, XAUUSD)')
-    print(f'  Search: target=[1-6], stop=[0.5-4], horizon=[15-60], threshold=[0.6-0.95]')
-    print(f'  Speed: RF_TREES={RF_TREES} (fast), 90% train subsample')
+    print(f'  OPTUNA OPTIMIZATION ({N_TRIALS} trials, directional, parallel)')
+    print(f'  Search: target=[2-8], stop=[0.5-3], horizon=[15-60], threshold=[0.4-0.9]')
+    print(f'  Speed: RF_TREES={RF_TREES} (fast), 50% train subsample')
     print(f'{"="*72}')
 
     objective = make_objective(df, split)
@@ -463,11 +460,8 @@ if __name__ == '__main__':
     print(f'\n  BEST PARAMETERS:')
     for k, v in bp.items():
         print(f'    {k:20s}: {v}')
-    # P&L per outcome
-    win_net = bp['target'] - bp['stop']
-    loss_net = -2 * bp['stop']
-    print(f'    {"WIN P&L":20s}: ${win_net:+.2f}')
-    print(f'    {"LOSS P&L":20s}: ${loss_net:+.2f}')
+    rr = (bp['target'] - SPREAD) / (bp['stop'] + SPREAD)
+    print(f'    {"actual_rr":20s}: {rr:.2f}')
 
     # ── Evaluate best ──
     print(f'\n{"─"*72}')
@@ -538,7 +532,7 @@ if __name__ == '__main__':
     # Save to CSV
     out_dir = os.path.join(os.path.dirname(__file__), 'output')
     os.makedirs(out_dir, exist_ok=True)
-    csv_path = os.path.join(out_dir, 'optuna_hedge_xauusd.csv')
+    csv_path = os.path.join(out_dir, 'optuna_directional_htf.csv')
     results_df.to_csv(csv_path, index=False)
     print(f'\n  Saved {len(results_df)} profitable trials -> {csv_path}')
 
@@ -547,13 +541,12 @@ if __name__ == '__main__':
     print(f'\n{"="*72}')
     print(f'  SUMMARY')
     print(f'{"="*72}')
-    print(f'  Mode: HEDGE (MOVEMENT DETECTION — predict movement, not direction)')
     print(f'  Total time: {total_time:.1f}s')
-    print(f'  WIN = target - stop, LOSS = -2×stop')
+    print(f'  Spread: ${SPREAD}/trade')
     print(f'  RF: depth={RF_DEPTH}, trees={RF_TREES} (fixed)')
     if opt:
-        print(f'  Best: TGT={bp["target"]}, SL={bp["stop"]}, '
+        print(f'  Best: TGT=${bp["target"]}, SL=${bp["stop"]}, '
               f'HOR={bp["horizon"]}, TH={bp["rf_threshold"]}')
-        print(f'  Best P&L: ${opt["total_pnl"]:,.2f} ({opt["total_pnl_R"]:+.1f}R) | '
-              f'RR: {opt["rr"]} | t: {opt["t_stat"]} | WR: {opt["wr"]}%')
+        print(f'  Best P&L: ${opt["total_pnl"]:,.2f} | RR: {opt["rr"]} | '
+              f't: {opt["t_stat"]} | WR: {opt["wr"]}%')
     print(f'{"="*72}')

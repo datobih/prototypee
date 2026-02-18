@@ -30,7 +30,7 @@ RF_DEPTH     = 20
 RF_TREES     = 200
 SPREAD       = 0.30
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw', 'XAUUSD1.csv')
+DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw', 'XAUUSD2023.csv')
 OUT_DIR   = os.path.join(os.path.dirname(__file__), 'output')
 
 

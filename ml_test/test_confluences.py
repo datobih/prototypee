@@ -18,6 +18,17 @@ from sklearn.ensemble import RandomForestClassifier
 
 warnings.filterwarnings('ignore')
 
+
+'''
+TARGET       = 2.0
+STOP         = 0.50
+HORIZON      = 15
+RF_THRESHOLD = 0.40
+RF_DEPTH     = 20
+RF_TREES     = 200
+SPREAD       = 0.30
+
+'''
 # ── Same params as backtest_directional ──
 TARGET       = 2.0
 STOP         = 0.50
@@ -27,7 +38,7 @@ RF_DEPTH     = 20
 RF_TREES     = 200
 SPREAD       = 0.30
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw', 'XAUUSD1.csv')
+DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw', 'XAUUSD2023.csv')
 
 # ── Feature engineering (identical to backtest_directional.py) ──
 def create_microstructure_features(df):

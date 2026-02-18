@@ -10,10 +10,10 @@ import sys, os
 # =============================================================================
 # CONFIGURABLE PARAMETERS - Modify these values as needed
 # =============================================================================
-TARGET = 3    # Target profit in dollars (e.g., 5.0 = $5)
-STOP = 1.5         # Stop loss in dollars (e.g., 2.5 = $2.5)
-HORIZON = 30      # Number of bars to look ahead for outcome
-RF_THRESHOLD = 0.75 # Random Forest probability threshold for hedge entry
+TARGET = 2.5    # Target profit in dollars (e.g., 5.0 = $5)
+STOP = 0.5         # Stop loss in dollars (e.g., 2.5 = $2.5)
+HORIZON = 45     # Number of bars to look ahead for outcome
+RF_THRESHOLD = 0.70 # Random Forest probability threshold for hedge entry
 
 def create_microstructure_features(df):
     df = df.copy()
