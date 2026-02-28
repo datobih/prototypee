@@ -1,0 +1,155 @@
+﻿================================================================================
+XAUUSD 1MIN FEATURE CORRELATION ANALYSIS
+================================================================================
+
+Loading data...
+Loaded 316047 bars (1-minute timeframe)
+
+Engineering features...
+
+Labeling outcomes (30 bars, $3 target, $1.5 stop)...
+  Labeling 0/315799...
+  Labeling 20000/315799...
+  Labeling 40000/315799...
+  Labeling 60000/315799...
+  Labeling 80000/315799...
+  Labeling 100000/315799...
+  Labeling 120000/315799...
+  Labeling 140000/315799...
+  Labeling 160000/315799...
+  Labeling 180000/315799...
+  Labeling 200000/315799...
+  Labeling 220000/315799...
+  Labeling 240000/315799...
+  Labeling 260000/315799...
+  Labeling 280000/315799...
+  Labeling 300000/315799...
+
+Creating combination features...
+
+Train set: 189479 bars (60%)
+Purge gap: 30 bars (prevents label leakage)
+Test set: 126290 bars (40% minus purge)
+Base success rate: 66.5%
+
+================================================================================
+TRAINING RANDOM FOREST
+================================================================================
+Training on 189479 samples with 82 features
+Class distribution: 0=82825 (43.7%) 1=53803 (28.4%) 2=52851 (27.9%)
+AUC-ROC (move vs no-move): 0.5530
+
+Directional probabilities on test set:
+  p_long  mean=0.313  max=0.537
+  p_short mean=0.309  max=0.459
+  p_move  mean=0.622  max=0.876
+  edge    mean=0.029  max=0.222
+
+Top 15 features by importance:
+  gk_vol_50                           0.0874
+  parkinson_vol_20                    0.0651
+  gk_vol_20                           0.0545
+  gk_vol_10                           0.0529
+  keltner_width_10                    0.0455
+  keltner_width_20                    0.0439
+  parkinson_vol_10                    0.0387
+  combo_bw_squeeze                    0.0385
+  mins_since_session                  0.0263
+  boll_width_100                      0.0241
+  hour_sin                            0.0219
+  mins_session_cos                    0.0216
+  combo_gk_flow                       0.0194
+  combo_gk_dist                       0.0192
+  mins_session_sin                    0.0189
+
+Filtered trading results by probability threshold:
+Threshold    Success %    Frequency %  Count
+------------------------------------------------------------
+0.60                68.4       75.03       94753
+0.65                69.7       44.93       56746
+0.70                79.2        4.54        5734
+0.75                92.6        0.71         893
+0.80                96.1        0.34         433
+0.85                97.8        0.14         179
+
+*** RF >= 0.7 RESULTS ***
+Success Rate: 79.2%
+Trade Count: 5734
+Frequency: 4.54%
+Saved: models/random_forest.pkl, models/feature_names.txt
+
+Baseline: 66.5%
+
+Saved test results: data/processed/XAUUSD1_feature_analysis.csv
+
+================================================================================
+DIRECTIONAL STRATEGY - FORWARD TEST
+================================================================================
+Logic: 3-class RF -> p_long, p_short, p_move, edge
+       p_move >= 0.7, edge >= 0.1
+       LONG:  trend_align==1 & flow_5>0
+       SHORT: trend_align==-1 & flow_5<0
+
+Total test bars: 126290
+Pass p_move >= 0.7: 5734 (4.54%)
+Pass edge >= 0.1: 598
+LONG entries (all gates): 65
+SHORT entries (all gates): 1
+Total directional entries: 66
+
+Total directional setups: 66
+
+--- OVERALL PERFORMANCE ---
+Total setups: 66
+Wins: 33
+Losses: 33
+Win Rate: 50.0% (breakeven: 33.3%)
+
+Total P&L: $49.50
+Avg P&L: $0.7500 per trade
+Profit Factor: 2.00
+RR: 3:1.5 = 2.0:1
+
+--- BY TRADE DIRECTION ---
+LONG       65 trades  WR:  50.8%  P&L: $   51.00
+SHORT       1 trades  WR:   0.0%  P&L: $   -1.50
+
+--- SESSION BREAKDOWN ---
+ASIAN           19 trades  WR:  47.4%  P&L: $   12.00
+LONDON           7 trades  WR:  42.9%  P&L: $    3.00
+NY_OVERLAP      26 trades  WR:  53.8%  P&L: $   24.00
+NY               5 trades  WR:  60.0%  P&L: $    6.00
+LATE             9 trades  WR:  44.4%  P&L: $    4.50
+
+--- BY EDGE BUCKET ---
+edge [0.10, 0.15):    61 trades  WR:  52.5%  P&L: $   52.50
+edge [0.15, 0.20):     5 trades  WR:  20.0%  P&L: $   -3.00
+
+Saved: data/processed/HEDGE_strategy.csv
+
+--- SAMPLE DIRECTIONAL TRADES (first 20) ---
+        Datetime    session  p_long  p_short  p_move  edge  trend_align   flow_5 trade_dir   entry result  pnl  outcome
+2025-09-23 09:09     LONDON   0.408    0.293   0.701 0.115            1 0.000728      LONG 3781.26    WIN  3.0        1
+2025-09-23 09:11     LONDON   0.422    0.280   0.701 0.142            1 0.001167      LONG 3782.59    WIN  3.0        1
+2025-09-23 09:12     LONDON   0.425    0.283   0.708 0.141            1 0.001380      LONG 3783.74   LOSS -1.5        0
+2025-10-05 23:03       LATE   0.452    0.317   0.769 0.135            1 0.003906      LONG 3911.44    WIN  3.0        1
+2025-10-05 23:04       LATE   0.493    0.348   0.841 0.145            1 0.004483      LONG 3917.34    WIN  3.0        1
+2025-10-05 23:05       LATE   0.472    0.355   0.827 0.116            1 0.004703      LONG 3917.17   LOSS -1.5        2
+2025-10-10 15:06 NY_OVERLAP   0.463    0.350   0.813 0.113            1 0.002915      LONG 4006.84    WIN  3.0        1
+2025-10-12 23:08       LATE   0.427    0.320   0.748 0.107            1 0.003241      LONG 4058.86   LOSS -1.5        2
+2025-10-14 22:15       LATE   0.418    0.303   0.720 0.115            1 0.003481      LONG 4163.05   LOSS -1.5        2
+2025-10-16 22:18       LATE   0.478    0.367   0.845 0.110            1 0.003432      LONG 4370.61    WIN  3.0        1
+2025-10-17 17:41         NY   0.448    0.347   0.794 0.101            1 0.003734      LONG 4223.91    WIN  3.0        1
+2025-10-22 01:06      ASIAN   0.485    0.377   0.862 0.108            1 0.008718      LONG 4109.30    WIN  3.0        1
+2025-10-22 01:07      ASIAN   0.491    0.371   0.862 0.120            1 0.006327      LONG 4110.91   LOSS -1.5        2
+2025-10-22 01:08      ASIAN   0.452    0.340   0.792 0.112            1 0.003630      LONG 4105.30    WIN  3.0        1
+2025-10-22 01:09      ASIAN   0.459    0.346   0.804 0.113            1 0.002891      LONG 4111.14   LOSS -1.5        0
+2025-10-22 01:10      ASIAN   0.463    0.331   0.794 0.132            1 0.002480      LONG 4112.77    WIN  3.0        1
+2025-10-22 01:11      ASIAN   0.465    0.347   0.811 0.118            1 0.002021      LONG 4117.40   LOSS -1.5        2
+2025-10-22 02:10      ASIAN   0.449    0.341   0.790 0.108            1 0.003808      LONG 4115.04   LOSS -1.5        0
+2025-10-22 07:50      ASIAN   0.402    0.298   0.700 0.104            1 0.000646      LONG 4142.91   LOSS -1.5        2
+2025-10-24 12:30     LONDON   0.477    0.370   0.847 0.108            1 0.007163      LONG 4091.26   LOSS -1.5        2
+
+================================================================================
+ANALYSIS COMPLETE
+================================================================================

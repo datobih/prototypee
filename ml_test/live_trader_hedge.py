@@ -21,12 +21,13 @@ from datetime import datetime, timedelta, timezone
 import sys
 import os
 
-# Setup logging
+# Setup logging — save log next to this script
+_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'live_trader_hedge.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler('live_trader_hedge.log'),
+        logging.FileHandler(_LOG_PATH),
         logging.StreamHandler()
     ]
 )

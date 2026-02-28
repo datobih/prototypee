@@ -1,18 +1,15 @@
-﻿import pandas as pd
+import pandas as pd
 import numpy as np
-from scipy import stats
-from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, roc_auc_score
-import sys, os
+from sklearn.metrics import roc_auc_score
+import os
 
 # =============================================================================
 # CONFIGURABLE PARAMETERS - Modify these values as needed
 # =============================================================================
-TARGET = 3    # Target profit in dollars (e.g., 5.0 = $5)
-STOP = 1.5       # Stop loss in dollars (e.g., 2.5 = $2.5)
-HORIZON = 30     # Number of bars to look ahead for outcome
+TARGET = 5   # Target profit in dollars (e.g., 5.0 = $5)
+STOP =1          # Stop loss in dollars (e.g., 2.5 = $2.5)
+HORIZON = 5      # Number of bars to look ahead for outcome
 RF_THRESHOLD = 0.70 # Random Forest probability threshold for hedge entry
 
 def create_microstructure_features(df):
@@ -144,41 +141,265 @@ def create_microstructure_features(df):
     # Distance from EMA × flow (overextended + strong flow = momentum)
     df['combo_dist_flow'] = df['abs_dist_ema8'] * df['abs_flow_5']
     
+    # =====================================================================
+    # ROUND 2 FEATURES — based on RF importance analysis
+    # RF top themes: flow magnitude (42.5%), EMA distance (33.5%)
+    # Strategy: deepen these, add normalized variants, z-scores, time
+    # =====================================================================
+    
+    df = df.copy()  # defragment before Round 2 features
+    
+    # --- A. EXTENDED ABSOLUTE FLOW ---
+    df['abs_flow_15'] = df['flow_15'].abs()
+    df['abs_flow_20'] = df['flow_20'].abs()
+    
+    # Flow z-score: how extreme is current flow vs recent history
+    flow10_mean = df['abs_flow_10'].rolling(50).mean()
+    flow10_std = df['abs_flow_10'].rolling(50).std()
+    df['flow_zscore'] = (df['abs_flow_10'] - flow10_mean) / (flow10_std + 1e-10)
+    
+    # Flow net ratio: how one-sided is the flow (1=perfectly one-sided)
+    abs_per_bar = df['directional_flow'].abs()
+    df['flow_net_ratio_5'] = df['abs_flow_5'] / (abs_per_bar.rolling(5).sum() + 1e-10)
+    df['flow_net_ratio_10'] = df['abs_flow_10'] / (abs_per_bar.rolling(10).sum() + 1e-10)
+    
+    # Flow concentration: max single-bar contribution to total flow
+    df['flow_max_bar_5'] = df['directional_flow'].abs().rolling(5).max()
+    df['flow_concentration_5'] = df['flow_max_bar_5'] / (abs_per_bar.rolling(5).sum() + 1e-10)
+    
+    # --- B. LONGER EMA DISTANCE ---
+    df['ema_50'] = df['Close'].ewm(span=50).mean()
+    df['ema_100'] = df['Close'].ewm(span=100).mean()
+    df['dist_ema50'] = (df['Close'] - df['ema_50']) / df['Close']
+    df['abs_dist_ema50'] = df['dist_ema50'].abs()
+    df['dist_ema100'] = (df['Close'] - df['ema_100']) / df['Close']
+    df['abs_dist_ema100'] = df['dist_ema100'].abs()
+    
+    # EMA spreads at multiple timeframes
+    df['ema_spread_21_50'] = (df['ema_21'] - df['ema_50']) / df['Close']
+    df['abs_ema_spread_21_50'] = df['ema_spread_21_50'].abs()
+    df['ema_spread_50_100'] = (df['ema_50'] - df['ema_100']) / df['Close']
+    df['abs_ema_spread_50_100'] = df['ema_spread_50_100'].abs()
+    
+    # Price z-score: how far from rolling mean in std units
+    roll_mean_20 = df['Close'].rolling(20).mean()
+    roll_std_20 = df['Close'].rolling(20).std()
+    df['price_zscore_20'] = (df['Close'] - roll_mean_20) / (roll_std_20 + 1e-10)
+    df['abs_price_zscore_20'] = df['price_zscore_20'].abs()
+    
+    roll_mean_50 = df['Close'].rolling(50).mean()
+    roll_std_50 = df['Close'].rolling(50).std()
+    df['price_zscore_50'] = (df['Close'] - roll_mean_50) / (roll_std_50 + 1e-10)
+    df['abs_price_zscore_50'] = df['price_zscore_50'].abs()
+    
+    # Bollinger band position: where is price within the bands
+    df['boll_upper_20'] = roll_mean_20 + 2 * roll_std_20
+    df['boll_lower_20'] = roll_mean_20 - 2 * roll_std_20
+    df['boll_width_20'] = (df['boll_upper_20'] - df['boll_lower_20']) / df['Close']
+    df['boll_pct_20'] = (df['Close'] - df['boll_lower_20']) / (df['boll_upper_20'] - df['boll_lower_20'] + 1e-10)
+    df['boll_outside_20'] = ((df['Close'] > df['boll_upper_20']) | (df['Close'] < df['boll_lower_20'])).astype(int)
+    
+    # --- C. ATR-NORMALIZED FEATURES (regime-independent) ---
+    df['flow_per_atr_3'] = df['abs_flow_3'] / (df['atr_10'] / df['Close'] + 1e-10)
+    df['flow_per_atr_10'] = df['abs_flow_10'] / (df['atr_10'] / df['Close'] + 1e-10)
+    df['dist_ema8_per_atr'] = df['abs_dist_ema8'] / (df['atr_10'] / df['Close'] + 1e-10)
+    df['dist_ema21_per_atr'] = df['abs_dist_ema21'] / (df['atr_10'] / df['Close'] + 1e-10)
+    df['ema_spread_per_atr'] = df['abs_ema_spread'] / (df['atr_10'] / df['Close'] + 1e-10)
+    
+    # ATR percentile: where does current vol sit in recent history
+    df['atr_percentile'] = df['atr_10'].rolling(100).rank(pct=True)
+    
+    # --- D. TIME FEATURES (cyclical encoding) ---
+    hour = df.index.hour
+    minute = df.index.minute
+    minutes_in_day = hour * 60 + minute
+    df['hour_sin'] = np.sin(2 * np.pi * hour / 24)
+    df['hour_cos'] = np.cos(2 * np.pi * hour / 24)
+    df['day_of_week'] = df.index.dayofweek
+    df['dow_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 5)
+    df['dow_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 5)
+    
+    # --- E. HIGHER-ORDER INTERACTIONS (top features combined) ---
+    # Flow × distance at multiple scales
+    df['combo_flow3_dist21'] = df['abs_flow_3'] * df['abs_dist_ema21']
+    df['combo_flow10_dist8'] = df['abs_flow_10'] * df['abs_dist_ema8']
+    df['combo_flow10_spread'] = df['abs_flow_10'] * df['abs_ema_spread']
+    # Flow × volatility regime
+    df['combo_flow_atr_pct'] = df['abs_flow_10'] * df['atr_percentile']
+    df['combo_flow_zscore_dist'] = df['flow_zscore'] * df['abs_dist_ema8']
+    # Triple interaction: flow × distance × vol
+    df['combo_triple'] = df['abs_flow_5'] * df['abs_dist_ema8'] * df['vol_ratio']
+    # Flow quality × magnitude
+    df['combo_net_ratio_flow'] = df['flow_net_ratio_10'] * df['abs_flow_10']
+    df['combo_concentration_flow'] = df['flow_concentration_5'] * df['abs_flow_5']
+    
+    # =====================================================================
+    # ROUND 3 FEATURES — volatility regime deep-dive
+    # boll_width_20 was #1 at 20% importance, hour ~9%
+    # Strategy: more vol measures, vol-of-vol, session, boll_width combos
+    # =====================================================================
+    
+    # --- F. ADVANCED VOLATILITY MEASURES ---
+    # Garman-Klass volatility (OHLC-based, more efficient estimator)
+    log_hl = (np.log(df['High'] / df['Low']))**2
+    log_co = (np.log(df['Close'] / df['Open']))**2
+    gk_single = 0.5 * log_hl - (2 * np.log(2) - 1) * log_co
+    df['gk_vol_10'] = gk_single.rolling(10).mean()
+    df['gk_vol_20'] = gk_single.rolling(20).mean()
+    df['gk_vol_50'] = gk_single.rolling(50).mean()
+    
+    # Parkinson volatility (high-low based)
+    df['parkinson_vol_10'] = (log_hl / (4 * np.log(2))).rolling(10).mean()
+    df['parkinson_vol_20'] = (log_hl / (4 * np.log(2))).rolling(20).mean()
+    
+    # Bollinger bands at multiple windows
+    roll_mean_50 = df['Close'].rolling(50).mean()
+    roll_std_50 = df['Close'].rolling(50).std()
+    df['boll_width_50'] = (4 * roll_std_50) / df['Close']
+    df['boll_pct_50'] = (df['Close'] - (roll_mean_50 - 2*roll_std_50)) / (4*roll_std_50 + 1e-10)
+    
+    roll_mean_100 = df['Close'].rolling(100).mean()
+    roll_std_100 = df['Close'].rolling(100).std()
+    df['boll_width_100'] = (4 * roll_std_100) / df['Close']
+    
+    # Keltner channel width (ATR-based bands)
+    df['keltner_width_20'] = (2 * 1.5 * df['atr_20']) / df['Close']
+    df['keltner_width_10'] = (2 * 1.5 * df['atr_10']) / df['Close']
+    
+    # Boll vs Keltner: squeeze detection (Bollinger inside Keltner = low vol squeeze)
+    df['boll_inside_keltner'] = (df['boll_width_20'] < df['keltner_width_20']).astype(int)
+    df['squeeze_intensity'] = df['keltner_width_20'] / (df['boll_width_20'] + 1e-10)
+    
+    # --- G. VOLATILITY OF VOLATILITY ---
+    # How stable/unstable is the current vol regime
+    df['vol_of_vol_20'] = df['boll_width_20'].rolling(20).std()
+    df['vol_of_vol_50'] = df['boll_width_20'].rolling(50).std()
+    
+    # Vol regime change: is volatility expanding or contracting
+    df['boll_width_roc'] = (df['boll_width_20'] - df['boll_width_20'].shift(5)) / (df['boll_width_20'].shift(5) + 1e-10)
+    df['gk_vol_roc'] = (df['gk_vol_10'] - df['gk_vol_10'].shift(10)) / (df['gk_vol_10'].shift(10) + 1e-10)
+    
+    # Vol percentile at multiple windows
+    df['boll_width_pct_50'] = df['boll_width_20'].rolling(50).rank(pct=True)
+    df['boll_width_pct_100'] = df['boll_width_20'].rolling(100).rank(pct=True)
+    df['boll_width_pct_200'] = df['boll_width_20'].rolling(200).rank(pct=True)
+    df['atr_percentile_200'] = df['atr_10'].rolling(200).rank(pct=True)
+    
+    # Vol z-score: how extreme is current vol vs recent history
+    bw_mean = df['boll_width_20'].rolling(50).mean()
+    bw_std = df['boll_width_20'].rolling(50).std()
+    df['vol_zscore'] = (df['boll_width_20'] - bw_mean) / (bw_std + 1e-10)
+    
+    # --- H. SESSION/TIME FEATURES (hour was ~9% importance) ---
+    # Binary session indicators
+    df['is_asian'] = ((hour >= 0) & (hour < 7)).astype(int)
+    df['is_london'] = ((hour >= 7) & (hour < 13)).astype(int)
+    df['is_ny'] = ((hour >= 13) & (hour < 20)).astype(int)
+    df['is_overlap'] = ((hour >= 13) & (hour < 17)).astype(int)
+    
+    # Minutes since session open (captures intraday vol patterns)
+    session_start = np.where(hour < 7, 0, np.where(hour < 13, 7, 13))
+    df['mins_since_session'] = (hour - session_start) * 60 + minute
+    df['mins_session_sin'] = np.sin(2 * np.pi * df['mins_since_session'] / 360)
+    df['mins_session_cos'] = np.cos(2 * np.pi * df['mins_since_session'] / 360)
+    
+    # --- I. INTERACTIONS WITH boll_width (dominant feature) ---
+    df['combo_bw_flow3'] = df['boll_width_20'] * df['abs_flow_3']
+    df['combo_bw_flow10'] = df['boll_width_20'] * df['abs_flow_10']
+    df['combo_bw_dist8'] = df['boll_width_20'] * df['abs_dist_ema8']
+    df['combo_bw_dist100'] = df['boll_width_20'] * df['abs_dist_ema100']
+    df['combo_bw_spread'] = df['boll_width_20'] * df['abs_ema_spread']
+    df['combo_bw_hour'] = df['boll_width_20'] * df['hour_cos']
+    df['combo_bw_momentum'] = df['boll_width_20'] * df['flow_momentum'].abs()
+    df['combo_bw_vol_roc'] = df['boll_width_20'] * df['boll_width_roc']
+    df['combo_bw_squeeze'] = df['boll_width_20'] * df['squeeze_intensity']
+    df['combo_gk_flow'] = df['gk_vol_10'] * df['abs_flow_10']
+    df['combo_gk_dist'] = df['gk_vol_10'] * df['abs_dist_ema21']
+    
+    # Defragment the DataFrame before returning
+    df = df.copy()
+    
     return df.dropna()
 
 def label_outcomes(df, horizon=15, target=5.0, stop=2.5):
-    """Label outcomes using fixed dollar SL/TP (not percentage-based)"""
+    """
+    Label outcomes using fixed dollar SL/TP.
+
+    For bars where BOTH the TP and SL are touched within the same 1-minute
+    candle (double-touch), we use Candle Structure Wick Analysis to resolve:
+    
+    LONG:
+    - Bullish candle (C >= O): Did it wick down before going up?
+      If (Open - Low) >= STOP -> SL hit first -> LOSS. Else WIN.
+    - Bearish candle (C < O): Price moved down -> SL hit first -> LOSS.
+    
+    SHORT:
+    - Bearish candle (C <= O): Did it wick up before going down?
+      If (High - Open) >= STOP -> SL hit first -> LOSS. Else WIN.
+    - Bullish candle (C > O): Price moved up -> SL hit first -> LOSS.
+    """
     df = df.copy()
     outcomes = []
-    
+
     for i in range(len(df) - horizon):
         if i % 20000 == 0:
             print(f'  Labeling {i}/{len(df)-horizon}...')
-        
-        entry = df['Close'].iloc[i]
+
+        entry  = df['Close'].iloc[i]
         future = df.iloc[i+1:i+horizon+1]
-        
-        # Check LONG (fixed dollar targets)
+
+        long_hi_tp  = entry + target
+        long_lo_sl  = entry - stop
+        short_lo_tp = entry - target
+        short_hi_sl = entry + stop
+
+        # --- LONG ---
         long_hit = False
-        for h, l in zip(future['High'], future['Low']):
-            if h >= entry + target:  # TP hit
+        for o, h, l, c in zip(future['Open'], future['High'], future['Low'], future['Close']):
+            hit_tp = h >= long_hi_tp
+            hit_sl = l <= long_lo_sl
+
+            if hit_tp and hit_sl:
+                # Double-touch: use Candle Structure Wick Analysis
+                if c >= o:  # Bullish candle
+                    if (o - l) >= stop:
+                        pass # SL hit on the bottom wick first -> LOSS
+                    else:
+                        long_hit = True # Went up first, bottom wick wasn't deep enough -> WIN
+                else: # Bearish candle (C < O)
+                    pass # Price moved down -> SL hit first -> LOSS
+                break  # resolved (win or loss) — stop scanning
+            elif hit_sl:
+                break  # clean SL hit first
+            elif hit_tp:
                 long_hit = True
-                break
-            if l <= entry - stop:  # SL hit
-                break
-        
-        # Check SHORT (fixed dollar targets)
+                break   # clean TP hit first
+
+        # --- SHORT (only if LONG didn't trigger) ---
         short_hit = False
         if not long_hit:
-            for h, l in zip(future['High'], future['Low']):
-                if l <= entry - target:  # TP hit
+            for o, h, l, c in zip(future['Open'], future['High'], future['Low'], future['Close']):
+                hit_tp = l <= short_lo_tp
+                hit_sl = h >= short_hi_sl
+
+                if hit_tp and hit_sl:
+                    # Double-touch: use Candle Structure Wick Analysis
+                    if c <= o: # Bearish candle
+                        if (h - o) >= stop:
+                            pass # SL hit on the top wick first -> LOSS
+                        else:
+                            short_hit = True # Went down first, top wick wasn't high enough -> WIN
+                    else: # Bullish candle (C > O)
+                        pass # Price moved up -> SL hit first -> LOSS
+                    break  # resolved
+                elif hit_sl:
+                    break  # clean SL hit first
+                elif hit_tp:
                     short_hit = True
-                    break
-                if h >= entry + stop:  # SL hit
-                    break
-        
+                    break   # clean TP hit first
+
         outcomes.append(1 if long_hit else (2 if short_hit else 0))
-    
+
     df = df.iloc[:len(outcomes)].copy()
     df['outcome'] = outcomes
     return df
@@ -213,144 +434,88 @@ df['combo_imbalance_momentum'] = df['imbalance_5'] * df['flow_5']
 df['combo_position_consistency'] = df['close_position'] * df['consistency_3']
 df['combo_vol_flow'] = df['vol_ratio'] * df['flow_3']
 
-# Split 60:40 for more test data
+# Split 60:40 with purge gap to prevent label leakage at boundary
 split = int(len(df) * 0.6)
-test = df.iloc[split:].copy()
+purge = HORIZON  # drop HORIZON bars between train/test so labels don't peek
+test = df.iloc[split + purge:].copy()
 
 print(f'\nTrain set: {split} bars (60%)')
-print(f'Test set: {len(test)} bars (40%)')
+print(f'Purge gap: {purge} bars (prevents label leakage)')
+print(f'Test set: {len(test)} bars (40% minus purge)')
 print(f'Base success rate: {(test["outcome"] != 0).sum() / len(test) * 100:.1f}%')
-
-# Analyze correlations
-print('\n' + '='*80)
-print('FEATURE CORRELATION WITH SUCCESSFUL TRADES')
-print('='*80)
 
 safe_trades = test['outcome'] != 0
 
-# Top 10 features by RF importance (pruned from 55 — less noise, better signal)
-feature_cols = [
-    'abs_ema_spread',    # 1. EMA 8-21 gap magnitude
-    'abs_flow_10',       # 2. 10-bar flow magnitude
-    'abs_flow_3',        # 3. 3-bar flow magnitude
-    'abs_flow_5',        # 4. 5-bar flow magnitude
-    'abs_dist_ema21',    # 5. Distance from EMA 21
-    'combo_dist_flow',   # 6. Distance × flow interaction
-    'abs_dist_ema8',     # 7. Distance from EMA 8
-    'flow_momentum',     # 8. Flow acceleration
-    'ema_spread',        # 9. EMA 8-21 spread (signed)
-    'flow_20',           # 10. 20-bar directional flow
+# All features for RF training
+all_features = [
+    # Original
+    'abs_ema_spread', 'abs_flow_10', 'abs_flow_3', 'abs_flow_5',
+    'abs_dist_ema21', 'combo_dist_flow', 'abs_dist_ema8',
+    'flow_momentum', 'ema_spread', 'flow_20',
+    # Round 2: extended flow, EMA distance, z-scores, time
+    'abs_flow_15', 'abs_flow_20', 'flow_zscore',
+    'flow_net_ratio_5', 'flow_net_ratio_10', 'flow_concentration_5',
+    'abs_dist_ema50', 'abs_dist_ema100',
+    'abs_ema_spread_21_50', 'abs_ema_spread_50_100',
+    'abs_price_zscore_20', 'abs_price_zscore_50',
+    'boll_width_20', 'boll_pct_20', 'boll_outside_20',
+    'flow_per_atr_3', 'flow_per_atr_10',
+    'dist_ema8_per_atr', 'dist_ema21_per_atr', 'ema_spread_per_atr',
+    'atr_percentile',
+    'hour_sin', 'hour_cos', 'dow_sin', 'dow_cos',
+    'combo_flow3_dist21', 'combo_flow10_dist8', 'combo_flow10_spread',
+    'combo_flow_atr_pct', 'combo_flow_zscore_dist', 'combo_triple',
+    'combo_net_ratio_flow', 'combo_concentration_flow',
+    # Round 3: volatility regime
+    'gk_vol_10', 'gk_vol_20', 'gk_vol_50',
+    'parkinson_vol_10', 'parkinson_vol_20',
+    'boll_width_50', 'boll_width_100', 'boll_pct_50',
+    'keltner_width_20', 'keltner_width_10',
+    'boll_inside_keltner', 'squeeze_intensity',
+    'vol_of_vol_20', 'vol_of_vol_50',
+    'boll_width_roc', 'gk_vol_roc',
+    'boll_width_pct_50', 'boll_width_pct_100', 'boll_width_pct_200',
+    'atr_percentile_200', 'vol_zscore',
+    'is_asian', 'is_london', 'is_ny', 'is_overlap',
+    'mins_since_session', 'mins_session_sin', 'mins_session_cos',
+    'combo_bw_flow3', 'combo_bw_flow10', 'combo_bw_dist8',
+    'combo_bw_dist100', 'combo_bw_spread', 'combo_bw_hour',
+    'combo_bw_momentum', 'combo_bw_vol_roc', 'combo_bw_squeeze',
+    'combo_gk_flow', 'combo_gk_dist',
 ]
 
-correlations = []
-for feat in feature_cols:
-    if feat in test.columns:
-        corr = test[feat].corr(safe_trades.astype(int))
-        safe_mean = test[safe_trades][feat].mean()
-        noise_mean = test[~safe_trades][feat].mean()
-        diff = abs(safe_mean - noise_mean)
-        correlations.append((feat, corr, safe_mean, noise_mean, diff))
-
-correlations.sort(key=lambda x: abs(x[1]), reverse=True)
-
-print(f'\n{"Feature":<20} {"Correlation":<12} {"Safe Mean":<12} {"Noise Mean":<12} {"Difference"}')
-print('-'*80)
-for feat, corr, safe_m, noise_m, diff in correlations[:15]:
-    print(f'{feat:<20} {corr:>11.4f} {safe_m:>11.4f} {noise_m:>11.4f} {diff:>11.4f}')
-
-# Create combination features
-print('\n' + '='*80)
-print('ANALYZING COMBINATION FEATURE CORRELATIONS')
-print('='*80)
-
-# All combo features pruned except combo_dist_flow (already in feature_cols)
-combo_features = []
-
-print(f'\n{"Combination Feature":<35} {"Correlation":<12} {"Safe Mean":<12} {"Noise Mean":<12} {"Difference"}')
-print('-'*100)
-combo_correlations = []
-for feat in combo_features:
-    corr = test[feat].corr(safe_trades.astype(int))
-    safe_mean = test[safe_trades][feat].mean()
-    noise_mean = test[~safe_trades][feat].mean()
-    diff = abs(safe_mean - noise_mean)
-    combo_correlations.append((feat, corr, safe_mean, noise_mean, diff))
-    print(f'{feat:<35} {corr:>11.4f} {safe_mean:>11.4f} {noise_mean:>11.4f} {diff:>11.4f}')
-
-combo_correlations.sort(key=lambda x: abs(x[1]), reverse=True)
-
 # ============================================================================
-# MULTI-FEATURE MODELS: Find optimal weighted combinations
+# TRAIN RF MODEL
 # ============================================================================
 print('\n' + '='*80)
-print('TRAINING MODELS TO FIND OPTIMAL FEATURE COMBINATIONS')
+print('TRAINING RANDOM FOREST')
 print('='*80)
 
-# Prepare train/test data
 train = df.iloc[:split].copy()
-train_safe = train['outcome'] != 0
-
-# Select all available features
-all_features = feature_cols + combo_features
 X_train = train[all_features].fillna(0)
-y_train = train_safe.astype(int)
+y_train = (train['outcome'] != 0).astype(int)
 X_test = test[all_features].fillna(0)
 y_test = safe_trades.astype(int)
 
-# Standardize features
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+print(f'Training on {len(X_train)} samples with {len(all_features)} features')
 
-print(f'\nTraining on {len(X_train)} samples with {len(all_features)} features')
-print(f'Testing on {len(X_test)} samples')
-
-# 1. Logistic Regression (linear combination of all features)
-print('\n--- LOGISTIC REGRESSION ---')
-print('Finding optimal linear combination of all features...')
-lr = LogisticRegression(max_iter=1000, random_state=42)
-lr.fit(X_train_scaled, y_train)
-
-lr_probs = lr.predict_proba(X_test_scaled)[:, 1]
-lr_auc = roc_auc_score(y_test, lr_probs)
-print(f'AUC-ROC: {lr_auc:.4f}')
-
-# Show most important features by coefficient
-feature_importance = list(zip(all_features, lr.coef_[0]))
-feature_importance.sort(key=lambda x: abs(x[1]), reverse=True)
-print(f'\nTop 10 features by coefficient:')
-for feat, coef in feature_importance[:10]:
-    print(f'  {feat:<35} {coef:>8.4f}')
-
-# Test different probability thresholds
-print(f'\nFiltered trading results by probability threshold:')
-print(f'{"Threshold":<12} {"Success %":<12} {"Frequency %":<12} {"Count"}')
-print('-'*60)
-for threshold in [0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]:
-    filtered = test[lr_probs >= threshold]
-    if len(filtered) > 0:
-        success_rate = (filtered['outcome'] != 0).sum() / len(filtered) * 100
-        frequency = len(filtered) / len(test) * 100
-        print(f'{threshold:<12.2f} {success_rate:>11.1f} {frequency:>11.2f} {len(filtered):>11d}')
-
-# 2. Random Forest (non-linear combinations)
-print('\n--- RANDOM FOREST ---')
-print('Finding optimal non-linear feature combinations...')
-rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+rf = RandomForestClassifier(
+    n_estimators=200, max_depth=12, min_samples_leaf=100,
+    min_samples_split=200, max_features='sqrt', random_state=42, n_jobs=-1
+)
 rf.fit(X_train, y_train)
 
 rf_probs = rf.predict_proba(X_test)[:, 1]
 rf_auc = roc_auc_score(y_test, rf_probs)
 print(f'AUC-ROC: {rf_auc:.4f}')
 
-# Show most important features
-feature_importance_rf = list(zip(all_features, rf.feature_importances_))
-feature_importance_rf.sort(key=lambda x: x[1], reverse=True)
-print(f'\nTop 10 features by importance:')
-for feat, importance in feature_importance_rf[:10]:
-    print(f'  {feat:<35} {importance:>8.4f}')
+# Feature importances
+feat_imp = sorted(zip(all_features, rf.feature_importances_), key=lambda x: x[1], reverse=True)
+print(f'\nTop 15 features by importance:')
+for feat, imp in feat_imp[:15]:
+    print(f'  {feat:<35} {imp:.4f}')
 
-# Test different probability thresholds
+# Threshold analysis
 print(f'\nFiltered trading results by probability threshold:')
 print(f'{"Threshold":<12} {"Success %":<12} {"Frequency %":<12} {"Count"}')
 print('-'*60)
@@ -361,144 +526,25 @@ for threshold in [0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]:
         frequency = len(filtered) / len(test) * 100
         print(f'{threshold:<12.2f} {success_rate:>11.1f} {frequency:>11.2f} {len(filtered):>11d}')
 
-# Highlight RF >= 0.75 specifically
-print(f'\n*** RF >= 0.75 RESULTS ***')
-filtered_75 = test[rf_probs >= 0.75]
+print(f'\n*** RF >= {RF_THRESHOLD} RESULTS ***')
+filtered_75 = test[rf_probs >= RF_THRESHOLD]
 if len(filtered_75) > 0:
     success_75 = (filtered_75['outcome'] != 0).sum() / len(filtered_75) * 100
     print(f'Success Rate: {success_75:.1f}%')
     print(f'Trade Count: {len(filtered_75)}')
     print(f'Frequency: {len(filtered_75) / len(test) * 100:.2f}%')
 
-# Save probabilities to test set for further analysis
-test['lr_prob'] = lr_probs
-test['rf_prob'] = rf_probs
-
-# Find best combinations
-print('\n' + '='*80)
-print('TESTING FEATURE COMBINATIONS (FILTERED SETUPS)')
-print('='*80)
-
-results = []
-
-# Test combinations
-combo1 = test[(test['imbalance_3'].abs() >= 2) & (test['consistency_5'] >= 4)]
-if len(combo1) > 0:
-    results.append(('Strong imbalance + high consistency', 
-                   (combo1['outcome'] != 0).sum() / len(combo1) * 100,
-                   len(combo1) / len(test) * 100, len(combo1)))
-
-combo2 = test[(test['flow_momentum'] > 0.0005) & (test['trend_align'] == 1) & (test['vol_expansion'] == 1)]
-if len(combo2) > 0:
-    results.append(('Flow accel + trend align + vol expansion', 
-                   (combo2['outcome'] != 0).sum() / len(combo2) * 100,
-                   len(combo2) / len(test) * 100, len(combo2)))
-
-combo3 = test[(test['big_body'] == 1) & (test['consistency_3'] == 3) & (test['close_position'] > 0.7)]
-if len(combo3) > 0:
-    results.append(('Big body + 3 up + strong close', 
-                   (combo3['outcome'] != 0).sum() / len(combo3) * 100,
-                   len(combo3) / len(test) * 100, len(combo3)))
-
-# Test combinations using the new combo features
-combo4 = test[test['combo_vol_imbalance'] > test['combo_vol_imbalance'].quantile(0.95)]
-if len(combo4) > 0:
-    results.append(('Top 5% vol*imbalance', 
-                   (combo4['outcome'] != 0).sum() / len(combo4) * 100,
-                   len(combo4) / len(test) * 100, len(combo4)))
-
-combo5 = test[test['combo_flow_trend'] > test['combo_flow_trend'].quantile(0.95)]
-if len(combo5) > 0:
-    results.append(('Top 5% flow*trend', 
-                   (combo5['outcome'] != 0).sum() / len(combo5) * 100,
-                   len(combo5) / len(test) * 100, len(combo5)))
-
-combo6 = test[test['combo_imbalance_momentum'] > test['combo_imbalance_momentum'].quantile(0.90)]
-if len(combo6) > 0:
-    results.append(('Top 10% imbalance*momentum', 
-                   (combo6['outcome'] != 0).sum() / len(combo6) * 100,
-                   len(combo6) / len(test) * 100, len(combo6)))
-
-# Add model-based filters
-combo7 = test[test['lr_prob'] >= 0.70]
-if len(combo7) > 0:
-    results.append(('LogReg prob >= 0.70', 
-                   (combo7['outcome'] != 0).sum() / len(combo7) * 100,
-                   len(combo7) / len(test) * 100, len(combo7)))
-
-combo8 = test[test['rf_prob'] >= 0.70]
-if len(combo8) > 0:
-    results.append(('RandomForest prob >= 0.70', 
-                   (combo8['outcome'] != 0).sum() / len(combo8) * 100,
-                   len(combo8) / len(test) * 100, len(combo8)))
-
-combo9 = test[(test['lr_prob'] >= 0.75) & (test['rf_prob'] >= 0.75)]
-if len(combo9) > 0:
-    results.append(('Both models >= 0.75', 
-                   (combo9['outcome'] != 0).sum() / len(combo9) * 100,
-                   len(combo9) / len(test) * 100, len(combo9)))
-
-results.sort(key=lambda x: x[1], reverse=True)
-
-print(f'\n{"Setup":<45} {"Success %":<12} {"Frequency %":<12} {"Count"}')
-print('-'*80)
-for setup, success, freq, count in results:
-    if count >= 10:
-        print(f'{setup:<45} {success:>11.1f} {freq:>11.2f} {count:>11d}')
-
-print(f'\nBaseline: {(test["outcome"] != 0).sum() / len(test) * 100:.1f}%')
-
-# Save models and scaler for live trading
-print('\n' + '='*80)
-print('SAVING MODELS FOR LIVE TRADING')
-print('='*80)
-
+# Save model
 import pickle
 os.makedirs('models', exist_ok=True)
-
-with open('models/logistic_regression_old.pkl', 'wb') as f:
-    pickle.dump(lr, f)
-print('Saved: models/logistic_regression_old.pkl')
-
-with open('models/random_forest_old.pkl', 'wb') as f:
+with open('models/random_forest.pkl', 'wb') as f:
     pickle.dump(rf, f)
-print('Saved: models/random_forest_old.pkl')
-
-with open('models/scaler_old.pkl', 'wb') as f:
-    pickle.dump(scaler, f)
-print('Saved: models/scaler_old.pkl')
-
-# Save feature names for reference
-with open('models/feature_names_old.txt', 'w') as f:
+with open('models/feature_names.txt', 'w') as f:
     f.write('\n'.join(all_features))
-print('Saved: models/feature_names_old.txt')
+print('Saved: models/random_forest.pkl, models/feature_names.txt')
 
-# Print manual trading criteria
-print('\n' + '='*80)
-print('MANUAL TRADING CRITERIA (NO MODEL NEEDED)')
-print('='*80)
-
-# Analyze successful trades to find typical feature ranges
-high_prob_trades = test[test['rf_prob'] >= 0.85]
-successful = high_prob_trades[high_prob_trades['outcome'] != 0]
-
-if len(successful) > 0:
-    print(f'\n85%+ Win Rate Setups ({len(high_prob_trades)} total, {len(successful)} successful):')
-    print(f'\nFeature ranges for high-probability trades:')
-    print('-'*80)
-    
-    key_features = ['vol_ratio', 'imbalance_3', 'consistency_5', 'big_body', 
-                    'vol_expansion', 'flow_momentum', 'trend_align', 'close_position']
-    
-    for feat in key_features:
-        if feat in successful.columns:
-            min_val = successful[feat].quantile(0.25)
-            max_val = successful[feat].quantile(0.75)
-            median = successful[feat].median()
-            print(f'{feat:<25} Median: {median:>8.4f}  Range: {min_val:>8.4f} to {max_val:>8.4f}')
-
-test.to_csv('data/processed/XAUUSD1_feature_analysis.csv')
-print(f'\nSaved test results: data/processed/XAUUSD1_feature_analysis.csv')
+test['rf_prob'] = rf_probs
+print(f'\nBaseline: {(test["outcome"] != 0).sum() / len(test) * 100:.1f}%')
 
 # ============================================================================
 # HEDGING STRATEGY - FORWARD TEST

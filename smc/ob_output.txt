@@ -1,0 +1,307 @@
+﻿==========================================================================================
+ORDER BLOCK MITIGATION FILTER ANALYSIS
+==========================================================================================
+Loaded 60,698 bars (30-min)  |  2021-01-03 23:30:00 ΓåÆ 2026-02-20 21:30:00
+Loading 1-min LTF data for entry confirmation...
+Loaded 1,814,972 bars (1-min)   |  2021-01-03 23:06:00 ΓåÆ 2026-02-20 21:57:00
+Impulsive candles: 1181 bullish, 1198 bearish
+
+Total OBs detected: 2295
+  Bullish: 1131  |  Bearish: 1164
+  Touched zone: 1971 (85.9%)
+  Mitigated (Respected): 456 (19.9%)
+  Not touched (within 200 bars): 324
+
+==========================================================================================
+LTF ENTRY CONFIRMATION (1-min)
+==========================================================================================
+Analyzing 1971 touched OBs on 1-min data (window=30 min)...
+  Processed 500/1971...
+  Processed 1000/1971...
+  Processed 1500/1971...
+
+LTF data available for: 1971/1971 touched OBs
+  CHoCH detected:      923 (46.8%)
+  Rejection wick:      1233 (62.6%)
+  Engulfing:           964 (48.9%)
+  Any confirmation:    1709 (86.7%)
+  No confirmation:     262
+
+LTF vs HTF risk (SL tightness):
+  Median risk ratio:   2.5x tighter
+  Mean risk ratio:     4.5x tighter
+  75th pct:            5.5x
+
+Bars to LTF confirmation (1-min bars):
+  Median: 21 min  |  Mean: 20 min  |  75th: 27 min
+
+==========================================================================================
+LTF ENTRY FILTER: BOUNCE RATE COMPARISON
+==========================================================================================
+
+Filter                                                    Bnc%  Count  Avg RR
+------------------------------------------------------------------------------------------
+BASELINE (all touched w/ LTF data)                       22.2%  1971     4.7
+
+Has ANY LTF confirmation                                 22.0%  1709     4.7
+NO LTF confirmation                                      23.7%   262     4.9
+
+LTF CHoCH                                                27.7%   923     4.9 <<<
+LTF Rejection                                            18.8%  1233     4.5
+LTF Engulfing                                            20.5%   964     4.4
+
+CHoCH + FVG                                              26.2%   759     5.4
+CHoCH + structure                                        26.2%   477     5.3
+CHoCH + FVG + structure                                  25.1%   399     5.7
+CHoCH + inducement                                       24.7%   308     5.1
+CHoCH + disp >= 3x                                       29.5%   824     5.0 <<<
+
+Rejection + FVG                                          18.2%   986     4.9
+Rejection + structure                                    17.9%   598     4.7
+
+Any LTF + FVG                                            21.2%  1391     5.0
+Any LTF + FVG + structure                                20.3%   704     5.2
+Any LTF + FVG + disp >= 3x                               21.9%  1285     5.0
+Any LTF + inducement + structure                         19.5%   293     5.3
+Any LTF + FVG + inducement                               20.6%   582     4.9
+
+Baseline bounce rate (w/ LTF data): 22.2%
+
+==========================================================================================
+MITIGATION RATE BY FILTER
+==========================================================================================
+
+BASELINE (all OBs)                              19.9%  ( 2295 OBs)
+------------------------------------------------------------------------------------------
+
+--- BY TYPE ---
+Bull OBs                                        19.7%  ( 1131 OBs)  avg bars:     22
+Bear OBs                                        20.0%  ( 1164 OBs)  avg bars:     23
+
+--- BY DISPLACEMENT (ATR multiples) ---
+Displacement >= 1.0x ATR                        19.9%  ( 2294 OBs)  avg bars:     23
+Displacement >= 1.5x ATR                        19.9%  ( 2294 OBs)  avg bars:     23
+Displacement >= 2.0x ATR                        19.9%  ( 2290 OBs)  avg bars:     23
+Displacement >= 3.0x ATR                        20.7%  ( 2068 OBs)  avg bars:     23
+Displacement >= 4.0x ATR                        20.8%  ( 1657 OBs)  avg bars:     26
+Displacement >= 5.0x ATR                        20.2%  ( 1242 OBs)  avg bars:     30
+Displacement < 2.0x ATR                          0.0%  (    5 OBs)  avg bars:    N/A
+Displacement < 3.0x ATR                         11.9%  (  227 OBs)  avg bars:      8
+
+--- BY IMPULSE CANDLE BODY SIZE ---
+Impulse body >= 1.5x ATR                        20.0%  ( 2257 OBs)  avg bars:     23
+Impulse body >= 2.0x ATR                        19.4%  ( 1374 OBs)  avg bars:     27
+Impulse body >= 2.5x ATR                        17.6%  (  712 OBs)  avg bars:     33
+Impulse body >= 3.0x ATR                        16.9%  (  397 OBs)  avg bars:     41
+
+--- BY CONSECUTIVE IMPULSE CANDLES ---
+Consecutive impulse >= 1                        19.9%  ( 2294 OBs)  avg bars:     23
+Consecutive impulse >= 2                        16.4%  (  371 OBs)  avg bars:     41
+Consecutive impulse >= 3                        16.0%  (   75 OBs)  avg bars:     66
+
+--- BY FVG CONFLUENCE ---
+Has FVG                                         18.1%  ( 1943 OBs)  avg bars:     29
+No FVG                                          29.8%  (  352 OBs)  avg bars:      1
+
+--- BY TRUE MARKET STRUCTURE (CHoCH/BOS) ---
+With True Structure                             18.5%  ( 1136 OBs)  avg bars:     23
+Counter Structure                               21.2%  ( 1159 OBs)  avg bars:     22
+Strong trend (EMA50>200)                        18.3%  ( 1150 OBs)  avg bars:     18
+Weak/no trend                                   21.5%  ( 1145 OBs)  avg bars:     26
+
+--- BY OB ZONE SIZE ---
+Tight OB zone (< 1.1x ATR)                      11.4%  ( 1135 OBs)  avg bars:     25
+Wide OB zone (>= 1.1x ATR)                      28.2%  ( 1160 OBs)  avg bars:     21
+OB zone <= 0.5x ATR                              3.3%  (   92 OBs)  avg bars:     65
+OB zone <= 0.75x ATR                             8.7%  (  448 OBs)  avg bars:     39
+OB zone <= 1.0x ATR                             10.8%  (  908 OBs)  avg bars:     29
+OB zone <= 1.5x ATR                             14.3%  ( 1701 OBs)  avg bars:     26
+
+--- BY RELATIVE VOLUME ---
+High OB Vol (> 1.2x VMA)                        32.2%  (  766 OBs)  avg bars:     21
+Low OB Vol (<= 1.2x VMA)                        13.7%  ( 1529 OBs)  avg bars:     25
+High Impulse Vol (> 1.5x VMA)                   23.3%  ( 1187 OBs)  avg bars:     27
+Very High Impulse Vol (> 2.0x VMA)              24.0%  (  828 OBs)  avg bars:     28
+
+--- BY SESSION ---
+Session: ASIAN                                  15.8%  (  951 OBs)  avg bars:     20
+Session: LONDON                                 19.3%  (  734 OBs)  avg bars:     23
+Session: NY_OVERLAP                             32.7%  (  401 OBs)  avg bars:     24
+Session: NY                                     21.8%  (  101 OBs)  avg bars:     36
+Session: LATE                                   10.2%  (  108 OBs)  avg bars:      7
+
+--- BY DISTANCE FROM EMA50 ---
+Close within 0.1% of EMA50                      16.0%  (  556 OBs)  avg bars:     33
+Close > 0.1% from EMA50                         21.1%  ( 1739 OBs)  avg bars:     20
+Close within 0.2% of EMA50                      16.0%  ( 1054 OBs)  avg bars:     24
+Close > 0.2% from EMA50                         23.1%  ( 1241 OBs)  avg bars:     22
+Close within 0.5% of EMA50                      17.9%  ( 1852 OBs)  avg bars:     23
+Close > 0.5% from EMA50                         28.0%  (  443 OBs)  avg bars:     21
+Close within 1.0% of EMA50                      19.4%  ( 2208 OBs)  avg bars:     23
+Close > 1.0% from EMA50                         32.2%  (   87 OBs)  avg bars:     18
+
+==========================================================================================
+BEST FILTER COMBINATIONS
+==========================================================================================
+
+Combo Filter                                             Mit %    Count   Avg Bars
+------------------------------------------------------------------------------------------
+FVG + Inducement + High Vol (>1.2)                        30.7%  (  231)        66 <<<
+High OB Vol (> 1.2x) + FVG                                29.3%  (  588)        30 <<<
+NY_OVERLAP + FVG + with_structure                         26.8%  (  164)        39 <<<
+FVG + Inducement                                          21.6%  (  677)        63
+Impulse Vol > 2.0x + FVG + disp >= 3x                     20.9%  (  666)        40
+Impulse Vol > 1.5x + FVG                                  20.7%  (  987)        37
+Counter structure + FVG + disp >= 3x                      19.9%  (  895)        29
+Strong trend + disp >= 3x                                 19.3%  ( 1041)        19
+LONDON + FVG + with_structure                             18.8%  (  298)        32
+Inducement + True Structure                               18.7%  (  342)        66
+FVG + disp >= 3x                                          18.5%  ( 1814)        30
+Impulse body >= 2x + FVG                                  17.5%  ( 1214)        34
+FVG + disp >= 2x + with_structure                         16.9%  (  979)        29
+FVG + with_structure                                      16.8%  (  980)        29
+Impulse body >= 2x + FVG + structure                      16.3%  (  606)        36
+Strong trend + FVG + disp >= 2x                           16.2%  (  979)        24
+FVG + strong_trend                                        16.2%  (  980)        24
+FVG + consec >= 2                                         15.6%  (  365)        44
+FVG + consec >= 2 + with_structure                        11.8%  (  169)        48
+All filters: FVG+struct+disp3+consec2                     11.8%  (  169)        48
+FVG + tight zone (<0.75 ATR)                               8.0%  (  423)        45
+
+Baseline mitigation rate: 19.9%
+
+==========================================================================================
+BARS TO TOUCH (touched OBs only)
+==========================================================================================
+  Median: 6 bars
+  Mean:   23 bars
+  25th:   2 bars
+  75th:   24 bars
+
+  Mitigated within:
+    <=   5 bars:  47.5%
+    <=  10 bars:  60.6%
+    <=  20 bars:  72.1%
+    <=  50 bars:  85.6%
+    <= 100 bars:  93.7%
+
+==========================================================================================
+REACTION QUALITY ΓÇö BOUNCE vs BREAK (touched OBs only)
+==========================================================================================
+
+Total touched OBs: 1971
+  BOUNCE (held, >= 1 ATR favour): 438 (22.2%)
+  BREAK  (closed beyond zone):    1515 (76.9%)
+  WEAK   (held but barely moved): 18 (0.9%)
+
+BOUNCE stats:
+  Avg reaction:    6.0x ATR
+  Avg max adverse: 0.8x ATR
+  Avg R:R:         4.7
+  Median R:R:      3.5
+
+==========================================================================================
+BOUNCE RATE BY FILTER (what predicts a GOOD reaction)
+==========================================================================================
+
+BASELINE (all touched)                               22.2% bounce  (1971 OBs)
+------------------------------------------------------------------------------------------
+
+--- BY TYPE ---
+Bull OBs                                             22.4% bounce  (  954 OBs)  avg RR:  4.9
+Bear OBs                                             22.0% bounce  ( 1017 OBs)  avg RR:  4.6
+
+--- BY DISPLACEMENT ---
+Displacement >= 2.0x ATR                             22.3% bounce  ( 1966 OBs)  avg RR:  4.7
+Displacement >= 3.0x ATR                             23.7% bounce  ( 1745 OBs)  avg RR:  4.8
+Displacement >= 4.0x ATR                             25.0% bounce  ( 1343 OBs)  avg RR:  4.7
+Displacement >= 5.0x ATR                             25.8% bounce  (  954 OBs)  avg RR:  4.5
+
+--- BY IMPULSE BODY SIZE ---
+Impulse body >= 1.5x ATR                             22.4% bounce  ( 1935 OBs)  avg RR:  4.7
+Impulse body >= 2.0x ATR                             22.9% bounce  ( 1124 OBs)  avg RR:  4.6
+Impulse body >= 2.5x ATR                             22.6% bounce  (  541 OBs)  avg RR:  4.6
+Impulse body >= 3.0x ATR                             22.8% bounce  (  285 OBs)  avg RR:  5.1
+
+--- BY CONSECUTIVE IMPULSE ---
+Consecutive impulse >= 1                             22.2% bounce  ( 1971 OBs)  avg RR:  4.7
+Consecutive impulse >= 2                             22.6% bounce  (  265 OBs)  avg RR:  3.6
+Consecutive impulse >= 3                             26.2% bounce  (   42 OBs)  avg RR:  2.6
+
+--- BY FVG ---
+Has FVG                                              21.2% bounce  ( 1621 OBs)  avg RR:  4.9
+No FVG                                               26.9% bounce  (  350 OBs)  avg RR:  4.2
+
+--- BY INDUCEMENT ---
+Has Inducement (swept liquidity)                     21.0% bounce  (  682 OBs)  avg RR:  4.7
+No Inducement                                        22.9% bounce  ( 1289 OBs)  avg RR:  4.7
+
+--- BY TRUE MARKET STRUCTURE (CHoCH/BOS) ---
+With True Structure                                  21.2% bounce  (  973 OBs)  avg RR:  5.0
+Counter Structure                                    23.2% bounce  (  998 OBs)  avg RR:  4.5
+Strong trend (EMA50>200)                             20.5% bounce  (  980 OBs)  avg RR:  5.2
+
+--- BY ZONE SIZE ---
+Zone <= 0.5x ATR                                      3.8% bounce  (   79 OBs)  avg RR:  7.4
+Zone > 0.5x ATR                                      23.0% bounce  ( 1892 OBs)  avg RR:  4.7
+Zone <= 0.75x ATR                                    10.5% bounce  (  373 OBs)  avg RR: 10.8
+Zone > 0.75x ATR                                     25.0% bounce  ( 1598 OBs)  avg RR:  4.1
+Zone <= 1.0x ATR                                     12.7% bounce  (  773 OBs)  avg RR:  8.9
+Zone > 1.0x ATR                                      28.4% bounce  ( 1198 OBs)  avg RR:  3.5
+
+--- BY VOLUME ---
+High OB Vol (> 1.2x VMA)                             35.7% bounce  (  641 OBs)  avg RR:  2.8
+Low OB Vol (<= 1.2x VMA)                             15.7% bounce  ( 1330 OBs)  avg RR:  6.9
+High Impulse Vol (> 1.5x VMA)                        26.9% bounce  (  966 OBs)  avg RR:  3.3
+Very High Impulse Vol (> 2.0x VMA)                   28.3% bounce  (  654 OBs)  avg RR:  3.1
+
+--- BY SESSION ---
+Session: ASIAN                                       17.5% bounce  (  851 OBs)  avg RR:  7.1
+Session: LONDON                                      22.5% bounce  (  610 OBs)  avg RR:  3.6
+Session: NY_OVERLAP                                  35.6% bounce  (  340 OBs)  avg RR:  2.9
+Session: NY                                          27.0% bounce  (   74 OBs)  avg RR:  4.3
+Session: LATE                                        11.5% bounce  (   96 OBs)  avg RR:  8.0
+
+--- BY BARS TO MITIGATION ---
+Mitigated within 5 bars                              24.0% bounce  (  936 OBs)  avg RR:  4.7
+Mitigated after 5 bars                               20.6% bounce  ( 1035 OBs)  avg RR:  4.8
+Mitigated within 10 bars                             23.1% bounce  ( 1195 OBs)  avg RR:  4.7
+Mitigated after 10 bars                              20.9% bounce  (  776 OBs)  avg RR:  4.7
+Mitigated within 20 bars                             22.5% bounce  ( 1421 OBs)  avg RR:  4.8
+Mitigated after 20 bars                              21.5% bounce  (  550 OBs)  avg RR:  4.5
+Mitigated within 50 bars                             22.2% bounce  ( 1688 OBs)  avg RR:  4.8
+Mitigated after 50 bars                              22.6% bounce  (  283 OBs)  avg RR:  4.5
+
+==========================================================================================
+BEST TRADEABLE COMBOS (maximize bounce rate)
+==========================================================================================
+
+Combo                                                       Bnc%   Cnt    RR
+------------------------------------------------------------------------------------------
+FVG + High OB Vol (>1.2)                                    35.6   464   3.1 <<<
+NY_OVERLAP + FVG + structure                                35.2   125   3.2 <<<
+FVG + Inducement + High OB Vol                              29.4   231   3.1 <<<
+FVG + V.High Imp Vol (>2) + disp>=3                         27.1   495   3.5
+FVG + High Impulse Vol (>1.5)                               25.7   768   3.6
+FVG + disp >= 4x                                            22.7  1210   4.8
+LONDON + FVG + structure                                    22.4   246   4.5
+FVG + disp >= 3x                                            22.0  1493   4.9
+FVG + consec >= 2                                           21.6   259   3.5
+FVG + mitigated > 20 bars                                   21.6   546   4.5
+FVG + Inducement                                            21.1   677   4.7
+FVG + mitigated > 10 bars                                   21.0   770   4.7
+FVG + disp>=3 + mit > 10 bars                               21.0   756   4.7
+FVG + disp >= 3x + structure                                20.7   757   5.2
+FVG + impulse >= 2x + structure                             20.5   478   4.9
+FVG + with_structure                                        20.0   818   5.1
+FVG + strong_trend                                          19.1   812   5.2
+Inducement + True Structure                                 18.4   342   5.2
+Strong + FVG + disp>=3 + consec>=2                          16.5   139   4.2
+FVG + consec >= 2 + structure                               16.4   116   3.0
+FVG + disp>=3 + tight zone                                  10.5   306  10.7
+FVG + tight zone + structure                                 7.0   186  10.7
+
+Baseline bounce rate: 22.2%
+
+Saved 2295 OBs to C:\Dev\finance\protype_2\smc\..\data\processed\ob_mitigation_study.csv
+==========================================================================================
